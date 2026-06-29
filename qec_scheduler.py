@@ -1,87 +1,85 @@
 """
-Yokomori QEC round scheduler — Layer 1: CONSTRUCT
-=================================================
-Build the distance-d rotated surface code and check its census.
+Yokomori QEC round scheduler
+============================
+Lowers an abstract surface-code error-correction round onto a concrete
+trapped-ion chip, in four layers (construct -> colour -> place -> schedule+check).
+Guiding principle: GENERATE-then-CHECK. Each layer produces something, and
+separate, simpler routines certify it. We never trust the generator, only the
+checks plus the hand-verified d=3 base case.
 
-This is the first of four layers. The guiding principle of the whole
-scheduler is GENERATE-then-CHECK: each layer produces something, and a
-separate, simpler routine asserts it is correct. We never have to trust the
-generator — only the (much simpler) checker, plus the hand-verified d=3 case.
+LAYER 1 (this file): build the abstract code itself -- its data qubits and its
+stabilizer checks -- and prove we built the right one.
 
-YOUR JOB for Layer 1: implement `build_stabilizers(d)` from the spec in its
-docstring. Everything else is scaffolding. Then run:
+  Arc:  REPRESENT  (Coord, Stabilizer)
+        ENUMERATE  the qubits        (data_qubits)
+        GENERATE   the checks        (build_stabilizers)   <- the heart
+        AUDIT      two ways          (check_census, check_d3_matches_reference)
+        RUN+REPORT                   (__main__)
 
-    python3 qec_scheduler.py
-
-and make both checks print PASS.
+Run it with:  python3 qec_scheduler.py
 """
 from __future__ import annotations
 from dataclasses import dataclass
 
-# ----------------------------------------------------------------------
-# Data structures + plumbing  (provided — you don't need to touch these)
-# ----------------------------------------------------------------------
 
-Coord = tuple[int, int]            # (row, col); row 0 = top, col 0 = left
+# --- REPRESENT -------------------------------------------------------------
+# How we locate a qubit: its (row, col) on the code's 2D grid. Which qubits a
+# stabilizer touches is decided by grid adjacency, so coordinates are the
+# foundation every later step builds on.
+Coord = tuple[int, int]
 
 
 @dataclass(frozen=True)
 class Stabilizer:
-    kind: str                      # "X" or "Z"
-    data: frozenset                # the data-qubit Coords this check touches
+    """One parity check -- the atomic object the whole scheduler revolves around.
+
+    Records the only two facts that matter: its kind (X or Z) and the set of
+    data qubits it measures. frozen=True makes it immutable and hashable, so a
+    Stabilizer can live inside a set -- which the d=3 audit relies on.
+    """
+    kind: str                  # "X" or "Z"
+    data: frozenset            # the data-qubit Coords this check touches
 
     @property
-    def weight(self) -> int:
+    def weight(self) -> int:   # 4 for a bulk check, 2 for a boundary check
         return len(self.data)
 
 
+# --- ENUMERATE -------------------------------------------------------------
 def data_qubits(d: int) -> list:
-    """All d*d data-qubit coordinates."""
+    """Lay down the board: the d*d data qubits a distance-d code has.
+    The stabilizers are placed on top of these positions."""
     return [(r, c) for r in range(d) for c in range(d)]
 
 
 def num(rc: Coord, d: int) -> int:
-    """Row-major 1..d^2 label, matching d1..d9 in the HTML simulator."""
+    """Translator between our (row, col) and the simulator's 1..d^2 labels.
+    Exists only so the d=3 audit can compare against the hand-verified instance."""
     r, c = rc
     return r * d + c + 1
 
 
-# ----------------------------------------------------------------------
-# YOUR CORE FUNCTION — write this one.
-# ----------------------------------------------------------------------
-
+# --- GENERATE  (the heart of Layer 1) --------------------------------------
 def build_stabilizers(d: int) -> list:
+    """Encode the rotated surface code's rules and emit all d^2 - 1 checks.
+    This is the 'construct the code' stage -- the one piece that actually
+    produces the code the chip will later have to run.
+
+    BULK (weight-4): for every r, c in 0..d-2, a plaquette on the 2x2 block
+        {(r,c),(r,c+1),(r+1,c),(r+1,c+1)}, kind "X" if (r+c) even else "Z".
+    BOUNDARY (weight-2): caps the dangling plaquettes; each edge carries one
+        kind on alternating positions (top X, bottom X, left Z, right Z).
+
+    [not written yet -- this is what we fill in next, line by line]
     """
-    Return all (d*d - 1) stabilizers of the distance-d rotated surface code.
-
-    Coordinates: data qubit at (r, c), with r, c in 0..d-1.
-
-    BULK (weight-4):  for every r, c in 0..d-2, a plaquette on the 2x2 block
-        {(r, c), (r, c+1), (r+1, c), (r+1, c+1)},
-        kind = "X" if (r + c) is even, else "Z".              -> (d-1)^2 checks
-
-    BOUNDARY (weight-2): caps the dangling plaquettes on the four edges.
-        Each edge carries ONE kind, on alternating positions.
-        You are GIVEN the top edge as a worked example:
-            TOP    (row 0):   pairs {(0, c), (0, c+1)},  kind "X",  for c ODD.
-        Work out the other three by symmetry — the d=3 check below will tell
-        you immediately whether your parities are right:
-            BOTTOM (row d-1): pairs {(d-1, c), (d-1, c+1)}, kind "X", for c ???
-            LEFT   (col 0):   pairs {(r, 0), (r+1, 0)},     kind "Z", for r ???
-            RIGHT  (col d-1): pairs {(r, d-1), (r+1, d-1)},  kind "Z", for r ???
-                                                              -> 2(d-1) checks
-
-    (Stuck on the three "???" parities? Ask me and I'll reveal them — but try
-     the d=3 check first; it's a fast guess-and-confirm.)
-    """
-    raise NotImplementedError("write me — see the docstring above")
+    raise NotImplementedError("build_stabilizers: next to write")
 
 
-# ----------------------------------------------------------------------
-# Independent CHECKS  (provided — don't edit; just make them pass)
-# ----------------------------------------------------------------------
-
+# --- AUDIT #1: cheap, and holds at EVERY distance --------------------------
 def check_census(d: int) -> None:
+    """Does the output have the known surface-code census? Catches dropped,
+    extra, or mistyped checks. We don't take the generator's word for it --
+    we audit its counts against an established fact."""
     stabs = build_stabilizers(d)
     nX   = sum(s.kind == "X" for s in stabs)
     nZ   = sum(s.kind == "Z" for s in stabs)
@@ -97,26 +95,31 @@ def check_census(d: int) -> None:
             assert 0 <= r < d and 0 <= c < d, f"d={d}: ({r},{c}) out of grid"
 
 
-# The hand-verified d=3 stabilizers, exactly as in qec_round_simulator.html
-# (data labelled 1..9 row-major). This is our base-case ground truth.
+# --- AUDIT #2: strong, but only where we have ground truth ------------------
+# The eight d=3 checks, copied from the hand-verified HTML simulator (data
+# labelled 1..9). Census proves the SHAPE is right; this proves the CONTENT is.
 D3_REFERENCE = {
-    ("X", frozenset({1, 2, 4, 5})), ("X", frozenset({5, 6, 8, 9})),  # A1, A4 bulk
-    ("X", frozenset({2, 3})),       ("X", frozenset({7, 8})),         # B1, B2 boundary
-    ("Z", frozenset({2, 3, 5, 6})), ("Z", frozenset({4, 5, 7, 8})),  # A2, A3 bulk
-    ("Z", frozenset({1, 4})),       ("Z", frozenset({6, 9})),         # B3, B4 boundary
+    ("X", frozenset({1, 2, 4, 5})), ("X", frozenset({5, 6, 8, 9})),
+    ("X", frozenset({2, 3})),       ("X", frozenset({7, 8})),
+    ("Z", frozenset({2, 3, 5, 6})), ("Z", frozenset({4, 5, 7, 8})),
+    ("Z", frozenset({1, 4})),       ("Z", frozenset({6, 9})),
 }
 
 
 def check_d3_matches_reference() -> None:
+    """Does d=3 reproduce, check for check, the instance we verified by hand?"""
     got = {(s.kind, frozenset(num(rc, 3) for rc in s.data))
            for s in build_stabilizers(3)}
     assert got == D3_REFERENCE, (
         "d=3 does not match the simulator:\n"
-        f"  you are MISSING: {D3_REFERENCE - got}\n"
-        f"  you have EXTRA : {got - D3_REFERENCE}"
+        f"  missing: {D3_REFERENCE - got}\n"
+        f"  extra:   {got - D3_REFERENCE}"
     )
 
 
+# --- RUN + REPORT ----------------------------------------------------------
+# Execute the audits and print a one-line PASS/FAIL, so every change gets an
+# instant verdict on whether Layer 1 is still correct.
 if __name__ == "__main__":
     try:
         for d in (3, 5, 7, 9, 11):
@@ -124,7 +127,7 @@ if __name__ == "__main__":
         print("census check ........ PASS  (d = 3, 5, 7, 9, 11)")
         check_d3_matches_reference()
         print("d=3 vs simulator .... PASS")
-        print("\nLayer 1 done. Next: Layer 2 — the 4-step colouring.")
+        print("\nLayer 1 done. Next: Layer 2 -- the 4-step colouring.")
     except NotImplementedError as e:
         print("build_stabilizers not written yet:", e)
     except AssertionError as e:
