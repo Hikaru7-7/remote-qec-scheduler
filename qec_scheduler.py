@@ -70,9 +70,31 @@ def build_stabilizers(d: int) -> list:
     BOUNDARY (weight-2): caps the dangling plaquettes; each edge carries one
         kind on alternating positions (top X, bottom X, left Z, right Z).
 
-    [not written yet -- this is what we fill in next, line by line]
+    Returns a plain list of Stabilizer objects; their order does not matter.
     """
-    raise NotImplementedError("build_stabilizers: next to write")
+    stabs = []
+
+    # BULK -- a weight-4 plaquette on every interior 2x2 block of data qubits.
+    # The X/Z kind alternates like a checkerboard, set by the parity of (r + c).
+    for r in range(d - 1):
+        for c in range(d - 1):
+            block = frozenset({(r, c), (r, c + 1), (r + 1, c), (r + 1, c + 1)})
+            kind = "X" if (r + c) % 2 == 0 else "Z"
+            stabs.append(Stabilizer(kind, block))
+
+    # BOUNDARY -- weight-2 caps on the dangling plaquettes, one loop per edge.
+    # Top and bottom carry X, left and right carry Z, each on alternating
+    # positions so the boundary interlocks with the bulk checkerboard.
+    for c in range(1, d - 1, 2):                  # top edge,    odd columns
+        stabs.append(Stabilizer("X", frozenset({(0, c), (0, c + 1)})))
+    for c in range(0, d - 1, 2):                  # bottom edge, even columns
+        stabs.append(Stabilizer("X", frozenset({(d - 1, c), (d - 1, c + 1)})))
+    for r in range(0, d - 1, 2):                  # left edge,   even rows
+        stabs.append(Stabilizer("Z", frozenset({(r, 0), (r + 1, 0)})))
+    for r in range(1, d - 1, 2):                  # right edge,  odd rows
+        stabs.append(Stabilizer("Z", frozenset({(r, d - 1), (r + 1, d - 1)})))
+
+    return stabs
 
 
 # --- AUDIT #1: cheap, and holds at EVERY distance --------------------------
