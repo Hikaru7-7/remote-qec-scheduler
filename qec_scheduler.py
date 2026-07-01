@@ -202,6 +202,34 @@ def readout_layers(cells: list) -> int:
     return layers
 
 
+def connection_phases(d: int, cells: list, verbose: bool = False) -> int:
+    """Count the serial two-qubit-gate phases in the 4 connection steps.
+    In-row gates fire together (1 phase). Cross-row gates that share a cell
+    serialize, so a step's cross-phases is its busiest cell's crossing count.
+    This is the round-time driver; the shuttling between phases is fast."""
+    cellof = {item: i for i, cell in enumerate(cells)
+              for kind, item in cell if kind == "anc"}
+    total = 0
+    for step in range(4):
+        inrow = 0
+        deg = {}                                   # cell -> crossings touching it
+        for stab in build_stabilizers(d):
+            home = cellof[stab]
+            for (r, c) in stab.data:
+                if corner_step(stab, (r, c)) != step:
+                    continue
+                if r == home:
+                    inrow = 1                      # an in-row gate exists this step
+                else:
+                    for cell in (home, r):         # a crossing touches both cells
+                        deg[cell] = deg.get(cell, 0) + 1
+        cross = max(deg.values(), default=0)
+        total += inrow + cross
+        if verbose:
+            print(f"    step {step}: in-row {inrow}, cross-phases {cross}")
+    return total
+
+
 def hand_422() -> list:
     """The earlier hand-built d=3 layout, per-cell {4,2,2}, kept for comparison."""
     by = {frozenset(num(rc, 3) for rc in s.data): s for s in build_stabilizers(3)}
@@ -327,7 +355,16 @@ if __name__ == "__main__":
         print(f"  d=3 hand     {{4,2,2}} : {readout_layers(hand_422())} layers")
         for d in (5, 7):
             print(f"  d={d} balanced         : {readout_layers(place(d))} layers")
-        print("\nLayer 4 in progress. Next: the connection-step moves (in-row + cross-row).")
+        print("connection gate phases (the round-time driver):")
+        print("  d=3 balanced {3,3,2}:")
+        p1 = connection_phases(3, place(3), verbose=True)
+        print(f"    total = {p1} phases")
+        print("  d=3 hand {4,2,2}:")
+        p2 = connection_phases(3, hand_422(), verbose=True)
+        print(f"    total = {p2} phases")
+        for d in (5, 7, 9):
+            print(f"  d={d} balanced: {connection_phases(d, place(d))} phases")
+        print("\nLayer 4: gate-phase count in place. Next: the full move-level no-pass check.")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
