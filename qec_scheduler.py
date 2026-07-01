@@ -554,8 +554,8 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
     sched = seam_schedule(d) if merge else {}
     lanes = sorted(sched.keys())
     ops = [("prep", merge)]
-    for s, cl, well in plan:                             # park them first, in routing order
-        ops.append(("park", s, cl, well))
+    if plan:
+        ops.append(("park", plan))                       # all idle ancillas park together (one time-step)
     for rnd in range(rounds):
         if rounds > 1:
             ops.append(("round", rnd, rounds))
@@ -592,8 +592,8 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
         if rnd < rounds - 1:
             ops += [("reset", layer) for layer in reversed(layers)]
             ops.append(("reset_done", rnd))
-    for s, cl, well in reversed(plan):                   # unpark in reverse order
-        ops.append(("unpark", s, cl, well))
+    if plan:
+        ops.append(("unpark", plan))
     return ops
 
 
@@ -680,28 +680,46 @@ def op_ions(d: int, op) -> set:
     if v in ("measure", "herald"):
         return {("c", l) for l in op[1]}
     if v in ("park", "unpark"):
-        return {("a", op[1])}
+        return {("a", s) for s, cl, well in op[1]}
+    return set()
+
+
+def op_junctions(d: int, op) -> set:
+    """The junctions an operation holds exclusively: a single cross-row lift or a comm-ion
+    crossing. Two operations holding the same junction cannot share a step. Park descents
+    are excluded on purpose: they run down the boundary junction as a same-direction train,
+    bottom-most leading with no passing, so they never hold it exclusively of one another."""
+    v = op[0]
+    if v in ("xlift", "xlower"):
+        return {(c, min(ac, tr)) for s, c, ac, tr in op[2]}
+    if v in ("comm_lift", "comm_lower"):
+        return {(d - 1, l) for l in op[2]}
     return set()
 
 
 def parallel_steps(d: int, merge: bool = False, rounds: int = 1) -> list:
-    """Greedily pack round_ops into simultaneous time-steps. An operation joins the
-    earliest step that is after every ion it needs was last touched and shares no ion
-    with the operations already in that step. Markers carry no ion and are dropped.
-    Returns the list of steps (each a list of op indices); its length is the parallel
-    depth, at or below the serial beat count."""
+    """Greedily pack round_ops into simultaneous time-steps, respecting BOTH resources.
+    An operation joins the earliest step after every ion it needs is free that shares no
+    ion and no junction with the operations already there. Data wells need no separate
+    check: a data qubit is an ion here, so two operations on the same well already share
+    that ion, and the placement gives every ancilla and park slot a distinct well. Markers
+    carry nothing and are dropped. The result is a valid, collision-free parallel schedule;
+    its length is the firm round-time depth. It is only mildly conservative on the park
+    descents, which could stagger down the shared boundary junction as a train; treating
+    that as a conflict rounds the depth up, never down."""
     ops = round_ops(d, merge, rounds)
-    step_ops, step_ions, ion_last = [], [], {}
+    step_res, step_ops, ion_last = [], [], {}
     for i, op in enumerate(ops):
         ions = op_ions(d, op)
         if not ions:
             continue
+        res = ions | {("j", jc) for jc in op_junctions(d, op)}
         t = max([ion_last[x] for x in ions if x in ion_last], default=-1) + 1
-        while t < len(step_ions) and (step_ions[t] & ions):
+        while t < len(step_res) and (step_res[t] & res):
             t += 1
-        if t == len(step_ions):
-            step_ops.append([]); step_ions.append(set())
-        step_ops[t].append(i); step_ions[t] |= ions
+        if t == len(step_res):
+            step_res.append(set()); step_ops.append([])
+        step_res[t] |= res; step_ops[t].append(i)
         for x in ions:
             ion_last[x] = t
     return step_ops
@@ -1015,7 +1033,7 @@ if __name__ == "__main__":
             t = op_tally(3, mg, rr)
             print(f"  {lbl}: {t['total_beats']:3d} serial beats, {t['two_qubit_gates']:2d} two-qubit gates")
             print(f"      by kind: {t['by_kind']}")
-        print("parallelism (serial listing is an upper bound; disjoint-ion ops share a step):")
+        print("parallelism (serial listing is an upper bound; ops with disjoint ions AND junctions share a step):")
         for lbl, mg, rr in [("local round     ", False, 1), ("one merge round  ", True, 1), ("full merge       ", True, None)]:
             for dd in (3, 5):
                 rounds = dd if rr is None else rr

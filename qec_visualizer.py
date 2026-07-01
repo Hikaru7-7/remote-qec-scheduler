@@ -152,25 +152,28 @@ def build(merge=False, rounds=1, d=3):
         elif v == "round":
             snap(f"Round {op[1] + 1} of {op[2]}.", badge=f"round {op[1] + 1}")
         elif v == "park":
-            # route through the boundary junction (column d-1) down to a park well on the
-            # bottom cell's row -- the plan and order come from scheduler.park_plan
-            s, cl, well = op[1], op[2], op[3]; aid = A(s)
-            setp(aid, JX(D - 1), CY[cl])
-            snap(f"Idle ancilla {aid} shuttles along its row to the boundary junction, the rightmost.", hi=[aid])
-            setp(aid, JX(D - 1), CY[D - 1])
-            snap(f"It descends the boundary junction to the bottom cell.", hi=[aid],
-                 junc=[(D - 1, k) for k in range(cl, D - 1)])
-            setp(aid, X(D - 0.5) + 48 * (well + 1), CY[D - 1])
-            snap(f"It parks in a spare well on the bottom cell's row, clearing its comm lane.", hi=[aid])
+            # scheduler.park_plan gives the ancillas and their bottom-cell wells. The shuttle
+            # to the junction is one parallel step (different rows); the descent is a same-
+            # direction train down the boundary junction, bottom-most first, to distinct wells.
+            plan = op[1]; hi = [A(s) for s, cl, well in plan]
+            for s, cl, well in plan:
+                setp(A(s), JX(D - 1), CY[cl])
+            snap("The idle right-boundary ancillas shuttle to the boundary junction together, each in its own row.", hi=hi)
+            for s, cl, well in sorted(plan, key=lambda p: -p[1]):
+                setp(A(s), JX(D - 1), CY[D - 1])
+                snap(f"{A(s)} descends the boundary junction to the bottom cell.", hi=[A(s)], junc=[(D - 1, k) for k in range(cl, D - 1)])
+                setp(A(s), X(D - 0.5) + 48 * (well + 1), CY[D - 1])
+                snap(f"It parks in its spare well on the bottom cell's row.", hi=[A(s)])
         elif v == "unpark":
-            s, cl, well = op[1], op[2], op[3]; aid = A(s)
-            setp(aid, JX(D - 1), CY[D - 1])
-            snap(f"Ancilla {aid} shuttles back to the boundary junction.", hi=[aid])
-            setp(aid, JX(D - 1), CY[cl])
-            snap(f"It ascends the boundary junction to its home cell.", hi=[aid],
-                 junc=[(D - 1, k) for k in range(cl, D - 1)])
-            setp(aid, *home[aid])
-            snap(f"It returns to its home well.", hi=[aid])
+            plan = op[1]; hi = [A(s) for s, cl, well in plan]
+            for s, cl, well in sorted(plan, key=lambda p: p[1]):
+                setp(A(s), JX(D - 1), CY[D - 1])
+                snap(f"{A(s)} leaves its park well for the boundary junction.", hi=[A(s)])
+                setp(A(s), JX(D - 1), CY[cl])
+                snap(f"It ascends the boundary junction to its home cell.", hi=[A(s)], junc=[(D - 1, k) for k in range(cl, D - 1)])
+            for s, cl, well in plan:
+                setp(A(s), *home[A(s)])
+            snap("The right-boundary ancillas shuttle back to their home wells together.", hi=hi)
         elif v == "inrow":
             L = op[1] + 1; hi = [A(s) for s, _ in op[2]]
             for s, rc in op[2]:
