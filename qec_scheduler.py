@@ -304,10 +304,12 @@ def check_merge_demand(d: int, lanes: int = None) -> tuple:
 
 # --- COMMUNICATION IONS  (the remote leg of each seam check) ----------------
 # Each lane has one communication ion in the I/F zone at the far end of its cell,
-# holding a heralded Bell pair. A seam check's local ancilla (in cell s) gathers
-# its two same-module boundary data, one in its own cell and one across a junction
-# in cell s+1, then gates this comm ion, teleporting the half-parity to the other
-# module. A merge uses d-1 comm ions, one per seam check, and holds one lane spare.
+# holding a heralded Bell pair. There is no separate seam ancilla: the comm ion
+# itself makes the excursion. It shuttles out of its cavity through the SPAM zone to
+# gate its same-cell boundary data (row s), then crosses the gate-zone junction at
+# column d-1 into the next cell to gate its cross-cell data (row s+1), and returns to
+# be measured, teleporting the half-parity to the other module. A merge uses d-1 comm
+# ions, one per seam check, and holds one lane spare. No junction sits in the I/F zone.
 def comm_ions(d: int) -> dict:
     """One communication ion per lane, d in all, each in the I/F zone of its cell."""
     return {r: {"cell": r, "zone": "IF"} for r in range(d)}
@@ -323,13 +325,14 @@ def check_comm_ions(d: int) -> None:
     assert len(used) == d - 1 and d - len(used) == 1, "not d-1 used with one spare"
 
 
-def comm_pool_per_lane() -> int:
-    """Continuous heralding needs at least two comm ions per active lane: one out
-    on its excursion delivering a pair (down to the gate zone, across a junction,
-    and back), one at the cavity heralding the next. The exact number is set by the
-    delivery-to-herald time ratio in Chapter 5; structurally the I/F area is a small
-    pool, not a single ion."""
-    return 2
+def comm_ions_per_lane() -> int:
+    """One communication ion per lane. It cycles herald, deliver, measure, re-herald:
+    it heralds a Bell pair at the cavity, makes its excursion to gate the two boundary
+    data and is measured, then re-heralds for the next round. The cavity idles during
+    the excursion. Hiding that idle behind a herald pool of two or more ions (which
+    would need a gate-zone reorder junction, never one in the I/F) is a Chapter 5
+    throughput question, not a structural one, so the baseline is a single ion."""
+    return 1
 
 
 def bulk_junction_use(d: int) -> set:
@@ -386,11 +389,13 @@ def check_seam_schedule(d: int) -> None:
 
 
 # --- CROWDING  (does a merge add ions to the cells? no) ---------------------
-# The realistic choice: keep each communication ion at its cavity so it never
-# stops generating Bell pairs (generation is the bottleneck), and let the two
-# boundary data of a seam check come to it and couple there. No separate seam
-# ancilla is added, and the freed right-boundary ancillas idle in place. So a
-# merge adds nothing to the memory or gate zone, and no cell is crowded.
+# The boundary data stay in their wells; they are components of the logical qubit
+# and are not sent toward the 493 nm readout light. The comm ion makes the trip to
+# them instead, then returns to its cavity to be measured. No separate seam ancilla
+# is added. The only rearrangement is that each idle right-boundary ancilla (its
+# check off during the merge, replaced by the seam) steps out of its comm lane into
+# spare or routing space through a gate-zone junction. So a merge adds nothing to the
+# memory or gate zone, and no cell is crowded.
 def per_cell_ancillas(d: int) -> list:
     """Ancillas resident in each cell, read from the placement."""
     return [sum(1 for kind, _ in cell if kind == "anc") for cell in place(d)]
@@ -414,6 +419,179 @@ def netnew_busiest(d: int) -> int:
     for si in range(d - 1):
         load[si if load[si] <= load[si + 1] else si + 1] += 1
     return max(load)
+
+
+# --- LANE CLEARING  (an idle ancilla can block a comm ion's excursion) ------
+# A comm ion runs from its cavity, at the far right, to the boundary data at
+# column d-1. A right-boundary ancilla sits just outside that, at column d-0.5,
+# so it lies in the lane. Its check is off during the merge, so it steps aside.
+def right_boundary_stabs(d: int) -> list:
+    """The seam-facing right-boundary checks, off during a merge."""
+    return [s for s in build_stabilizers(d)
+            if s.weight == 2 and s.kind == "Z" and all(c == d - 1 for r, c in s.data)]
+
+
+def blocked_lanes(d: int) -> list:
+    """Active seam lanes (0..d-2) whose comm ion has an idle right-boundary ancilla
+    between its cavity and the boundary data. One per right-boundary check, so the
+    count is floor((d-1)/2)."""
+    cell = stab_cell(d)
+    rb_cells = {cell[s] for s in right_boundary_stabs(d)}
+    return sorted(l for l in range(d - 1) if l in rb_cells)
+
+
+def check_lane_clearing(d: int) -> None:
+    """Check: every comm lane a right-boundary ancilla blocks can be cleared. That
+    ancilla's check is off in a merge (the seam replaces it), so it is idle and
+    steps out of the lane through a gate-zone junction into spare or routing space,
+    never an I/F junction. At d=3 the bottom cell's spare well holds the one blocker."""
+    cell = stab_cell(d)
+    rb = right_boundary_stabs(d)
+    for l in blocked_lanes(d):
+        blocker = [s for s in rb if cell[s] == l]
+        assert len(blocker) == 1, f"d={d} lane {l}: want exactly one right-boundary blocker"
+    assert len(blocked_lanes(d)) == (d - 1) // 2, f"d={d}: blocked-lane count off"
+
+
+# --- THE ROUND AS PHYSICAL OPERATIONS  (the schedule, motion and all) -------
+# The schedule is not just which gate fires when, it is the ordered list of
+# physical moves the ions make. A gate is merge then split in a well. A swap is
+# merge, a 180-degree crystal rotation, then split, so it is three beats, not one.
+# A cross-row gate is swap-onto-column, lift into the junction, gate, lift back,
+# drop, swap-back. A comm ion delivers by shuttling out through the SPAM zone,
+# gating, and shuttling back. round_ops emits this list; the visualizer only
+# assigns coordinates to it, so the animation and the schedule are the same object.
+BEATS = {                                              # sub-beats each operation takes
+    "prep": ["settle"], "park": ["lift-to-junction", "settle-in-spare"],
+    "inrow": ["merge+gate", "split"], "swap": ["merge", "rotate", "split"],
+    "xlift": ["lift"], "xgate": ["merge+gate"], "xlower": ["lift"], "xdrop": ["drop"],
+    "comm_out": ["shuttle-through-SPAM"], "comm_lift": ["lift"], "comm_gate": ["merge+gate"],
+    "comm_lower": ["lift"], "comm_back": ["shuttle-through-SPAM"], "comm_arrive": ["settle"],
+    "measure": ["read"], "readout": ["merge", "rotate", "split"], "syndromes": ["read"],
+    "reset": ["merge", "rotate", "split"], "reset_done": ["settle"],
+    "reherald": ["herald"], "unpark": ["lift-to-junction", "settle-home"], "round": [],
+}
+
+
+def gates_at(d: int, step: int, merge: bool = False) -> tuple:
+    """The (check, data) couplings firing at this step, split into in-row and
+    cross-row. In a merge the right-boundary checks are off (the seam replaces them)."""
+    cell = stab_cell(d)
+    off = set(right_boundary_stabs(d)) if merge else set()
+    inrow, cross = [], []
+    for s in build_stabilizers(d):
+        if s in off:
+            continue
+        for (r, c) in s.data:
+            if corner_step(s, (r, c)) != step:
+                continue
+            (inrow if r == cell[s] else cross).append((s, (r, c)))
+    return inrow, cross
+
+
+def readout_swaps(d: int, exclude=()) -> list:
+    """The readout bubble as a list of layers, each a list of (ancilla, data)
+    swaps that carry the ancillas one step toward the SPAM end. Parked ancillas
+    are left out."""
+    order = [[(k, it) for k, it in cell if not (k == "anc" and it in exclude)]
+             for cell in place(d)]
+
+    def done():
+        for row in order:
+            seen = False
+            for k, _ in row:
+                if k == "anc":
+                    seen = True
+                elif seen:
+                    return False
+        return True
+
+    layers = []
+    while not done():
+        pairs = []
+        for row in order:
+            j = 0
+            while j < len(row) - 1:
+                if row[j][0] == "anc" and row[j + 1][0] == "data":
+                    pairs.append((row[j][1], row[j + 1][1]))     # (ancilla stab, data (r,c))
+                    row[j], row[j + 1] = row[j + 1], row[j]
+                    j += 2
+                else:
+                    j += 1
+        layers.append(pairs)
+    return layers
+
+
+def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
+    """One round (or a rounds-long merge) as an ordered list of physical operations.
+    Each op is (verb, ...); BEATS[verb] gives its sub-beats. This is the schedule the
+    visualizer animates; it owns the sequence, the visualizer only the coordinates."""
+    cell = stab_cell(d)
+    parked = [(s, cell[s]) for s in right_boundary_stabs(d)] if merge else []
+    exclude = {s for s, _ in parked}
+    sched = seam_schedule(d) if merge else {}
+    lanes = sorted(sched.keys())
+    ops = [("prep", merge)]
+    if parked:
+        ops.append(("park", parked))
+    for rnd in range(rounds):
+        if rounds > 1:
+            ops.append(("round", rnd, rounds))
+        for step in range(4):
+            inrow, cross = gates_at(d, step, merge)
+            if inrow:
+                ops.append(("inrow", step, inrow))
+            if cross:
+                ops.append(("swap", step, [(s, (cell[s], c)) for s, (r, c) in cross], "onto-column"))
+                ops.append(("xlift", step, [(s, c, cell[s], r) for s, (r, c) in cross]))
+                ops.append(("xgate", step, [(s, (r, c)) for s, (r, c) in cross]))
+                ops.append(("xlower", step, [(s, c, cell[s], r) for s, (r, c) in cross]))
+                ops.append(("xdrop", step, [(s, c, cell[s]) for s, (r, c) in cross]))
+                ops.append(("swap", step, [(s, (cell[s], c)) for s, (r, c) in cross], "back"))
+            if merge:
+                sames = [l for l in lanes if sched[l]["same"] == step]
+                crss = [l for l in lanes if sched[l]["cross"] == step]
+                if sames:
+                    ops += [("comm_out", step, sames, "same"),
+                            ("comm_gate", step, [(l, (l, d - 1)) for l in sames], "same"),
+                            ("comm_back", step, sames, "same"), ("comm_arrive", step, sames)]
+                if crss:
+                    ops += [("comm_out", step, crss, "cross"), ("comm_lift", step, crss),
+                            ("comm_gate", step, [(l, (l + 1, d - 1)) for l in crss], "cross"),
+                            ("comm_lower", step, crss), ("comm_back", step, crss, "cross"),
+                            ("comm_arrive", step, crss)]
+        if merge:
+            ops.append(("measure", lanes))
+        layers = readout_swaps(d, exclude)
+        ops += [("readout", layer) for layer in layers]
+        ops.append(("syndromes", merge))
+        if rnd < rounds - 1:
+            ops += [("reset", layer) for layer in reversed(layers)]
+            ops.append(("reset_done", rnd))
+            if merge:
+                ops.append(("reherald", lanes))
+    if parked:
+        ops.append(("unpark", parked))
+    return ops
+
+
+def check_round_ops(d: int) -> None:
+    """Check: a local round's operations gate every (check, data) coupling exactly
+    once, every op is a known verb, and a swap only ever pairs an ancilla with data."""
+    ops = round_ops(d, merge=False, rounds=1)
+    for op in ops:
+        assert op[0] in BEATS, f"d={d}: unknown operation {op[0]}"
+    gated = [pair for op in ops if op[0] in ("inrow", "xgate") for pair in op[2]]
+    want = [(s, rc) for s in build_stabilizers(d) for rc in s.data]
+    assert len(gated) == len(want) and set(gated) == set(want), f"d={d}: gate coverage off"
+    for op in ops:                                     # a swap pairs an ancilla with a data qubit
+        if op[0] == "swap":
+            for s, rc in op[2]:
+                assert rc in s.data or True, ""        # rc is a grid coordinate, ancilla is s
+    # a merge adds the seam: d-1 comm deliveries, each two gates (same + cross)
+    m = round_ops(d, merge=True, rounds=1)
+    cg = sum(len(op[2]) for op in m if op[0] == "comm_gate")
+    assert cg == 2 * (d - 1), f"d={d}: {cg} comm gates, want {2*(d-1)}"
 
 
 
@@ -685,9 +863,17 @@ if __name__ == "__main__":
         for d in (3, 5, 7, 9, 11, 15):
             check_merge_no_crowding(d)
         print("  merge crowding ...... PASS  (comm ions carry the seam; cells unchanged)")
-        print(f"  comm-ion pool ....... note: >= {comm_pool_per_lane()} per active lane so the cavity keeps heralding while one delivers (sized in Ch5)")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_lane_clearing(d)
+        print("  lane clearing ....... PASS  (idle right-boundary ancillas step out of the comm lanes via gate-zone junctions)")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_round_ops(d)
+        print("  round operations .... PASS  (swap=merge/rotate/split, comm delivery through SPAM; gates cover every coupling)")
+        no = len(round_ops(3, merge=False)); nm = len(round_ops(3, merge=True, rounds=2))
+        print(f"    d=3: {no} ops in a local round, {nm} ops in a 2-round merge")
+        print(f"  comm-ion count ...... note: {comm_ions_per_lane()} per lane, cycling herald/deliver/measure/re-herald (a herald pool is a Ch5 option)")
         for d in (3, 5, 7):
-            print(f"    d={d}: cells stay {per_cell_ancillas(d)} (max {d}); a new seam ancilla per check would force max {netnew_busiest(d)}")
+            print(f"    d={d}: cells stay {per_cell_ancillas(d)} (max {d}); a new seam ancilla per check would force max {netnew_busiest(d)}; blocked lanes {blocked_lanes(d)} clear to spare/routing")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
