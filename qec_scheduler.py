@@ -100,6 +100,36 @@ def assign_steps(d: int) -> dict:
     return schedule
 
 
+# --- PLACE  (the heart of Layer 3) -----------------------------------------
+# The hand-checked d=3 layout: one code row per cell, data interleaved with the
+# ancillas that read them. A number is a data qubit (1..9); a set is an ancilla,
+# named by the data it reads. (General-d placement is a later pass.)
+D3_CELLS = [
+    [frozenset({1, 4}), 1, frozenset({1, 2, 4, 5}), 2, frozenset({2, 3, 5, 6}), 3, frozenset({2, 3})],
+    [4, frozenset({4, 5, 7, 8}), 5, frozenset({5, 6, 8, 9}), 6],
+    [7, frozenset({7, 8}), 8, frozenset({6, 9}), 9],
+]
+
+
+def place(d: int) -> list:
+    """Put each qubit in a well. Returns a list of cells; each cell is an
+    ordered list of items. An item is ("data", (r,c)) or ("anc", check)."""
+    if d != 3:
+        raise NotImplementedError("placement is d=3 only for now")
+    by_nums = {frozenset(num(rc, 3) for rc in s.data): s
+               for s in build_stabilizers(3)}
+    cells = []
+    for chain in D3_CELLS:
+        cell = []
+        for item in chain:
+            if isinstance(item, int):                 # data qubit, by its number
+                cell.append(("data", ((item - 1) // 3, (item - 1) % 3)))
+            else:                                     # ancilla, by the data it reads
+                cell.append(("anc", by_nums[item]))
+        cells.append(cell)
+    return cells
+
+
 # --- AUDIT #1: counts are right, at every distance -------------------------
 def check_census(d: int) -> None:
     """Check 1: are the counts right? Works at any d."""
@@ -148,6 +178,29 @@ def check_no_double_touch(d: int) -> None:
             f"d={d}, step {step}: a qubit is used twice"
 
 
+# --- AUDIT #4: the placement is well-formed --------------------------------
+def check_placement(d: int) -> None:
+    """Check 4: one ion per well, data in the right cell, every check placed,
+    and each ancilla sits next to a data qubit it reads."""
+    cells = place(d)
+    data_seen, anc_seen = set(), set()
+    for i, cell in enumerate(cells):
+        for slot, (kind, item) in enumerate(cell):
+            if kind == "data":
+                r, c = item
+                assert r == i, f"data {item} in cell {i}, want cell {r}"
+                assert item not in data_seen, f"data {item} placed twice"
+                data_seen.add(item)
+            else:
+                assert item not in anc_seen, "a check placed twice"
+                anc_seen.add(item)
+                near = cell[slot-1:slot] + cell[slot+1:slot+2]   # chain neighbours
+                ok = any(k == "data" and q in item.data for k, q in near)
+                assert ok, "an ancilla is not next to any data it reads"
+    assert len(data_seen) == d*d,  f"placed {len(data_seen)} data, want {d*d}"
+    assert len(anc_seen) == d*d-1, f"placed {len(anc_seen)} checks, want {d*d-1}"
+
+
 # --- RUN -------------------------------------------------------------------
 # Run the checks. Print pass or fail.
 if __name__ == "__main__":
@@ -160,7 +213,9 @@ if __name__ == "__main__":
         print("no qubit used twice . PASS  (d = 3,5,7,9,11)")
         check_d3_matches_reference()
         print("d=3 vs simulator .... PASS")
-        print("\nLayers 1-2 done. Next: Layer 3 -- place ions in wells.")
+        check_placement(3)
+        print("placement (d=3) ..... PASS")
+        print("\nLayer 3 done (d=3). Next: Layer 4 -- schedule the moves.")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
