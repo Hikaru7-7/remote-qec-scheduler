@@ -140,6 +140,7 @@ def build(merge=False, rounds=1, d=3):
     def Dt(rc): return ID_OF_DATA[rc]                 # data (r,c) -> "dN"
     def C(l):   return "C%d" % l                      # lane index -> comm ion id
     cx = X(D - 1)
+    spam_shift = 40                                   # ancillas step this far right into the SPAM zone, clear of data and park wells
 
     # --- one handler per operation the scheduler emits.  The sequence, the
     #     batching, and the beats all come from round_ops; this only places them.
@@ -254,11 +255,19 @@ def build(merge=False, rounds=1, d=3):
             snap("The comm ions are measured at their cavities; this round's Bell pairs reach module B.",
                  hi=[C(l) for l in op[1]], badge=f"{len(op[1])} pairs -> B")
         elif v == "readout":
-            swap_pairs([(A(s), Dt(rc)) for s, rc in op[1]], "Readout: an ancilla and its neighbour data")
+            swap_pairs([(A(s), Dt(rc)) for s, rc in op[1]], "Readout bubble: an ancilla and its neighbour data")
+        elif v == "to_spam":
+            for s in op[1]:
+                setp(A(s), pos[A(s)][0] + spam_shift, pos[A(s)][1])
+            snap("Every ancilla shuttles out past its data into the isolated SPAM zone.", hi=[A(s) for s in op[1]])
+        elif v == "from_spam":
+            for s in op[1]:
+                setp(A(s), pos[A(s)][0] - spam_shift, pos[A(s)][1])
+            snap("The ancillas shuttle back in from the SPAM zone.", hi=[A(s) for s in op[1]])
         elif v == "syndromes":
-            snap("Every ancilla is at the SPAM end; 493 nm readout gives the syndrome bits"
-                 + (", the seam ones included." if op[1] else "."),
-                 hi=[LABEL[s] for s in STABS if not (merge and is_right_boundary(s))], badge="syndromes")
+            snap("493 nm readout in the SPAM zone reads the syndrome bits"
+                 + (", the seam ones included." if op[2] else "."),
+                 hi=[A(s) for s in op[1]], badge="syndromes")
         elif v == "reset":
             swap_pairs([(A(s), Dt(rc)) for s, rc in op[1]], "Reset: an ancilla and its data")
         elif v == "reset_done":

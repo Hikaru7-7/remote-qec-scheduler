@@ -490,6 +490,7 @@ BEATS = {                                              # sub-beats each operatio
     "comm_out": ["shuttle-through-SPAM"], "comm_lift": ["lift"], "comm_gate": ["merge+gate"],
     "comm_lower": ["lift"], "comm_back": ["shuttle-through-SPAM"], "comm_arrive": ["settle"],
     "measure": ["read"], "readout": ["merge", "rotate", "split"], "syndromes": ["read"],
+    "to_spam": ["shuttle-to-SPAM"], "from_spam": ["shuttle-from-SPAM"],
     "reset": ["merge", "rotate", "split"], "reset_done": ["settle"], "herald": ["herald"],
     "unpark": ["shuttle-from-park", "junction-ascent", "shuttle-home"], "round": [],
 }
@@ -588,7 +589,10 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
             ops.append(("measure", lanes))
         layers = readout_swaps(d, exclude)
         ops += [("readout", layer) for layer in layers]
-        ops.append(("syndromes", merge))
+        read = [it for cl in place(d) for k, it in cl if k == "anc" and it not in exclude]
+        ops.append(("to_spam", read))                    # shuttle out past the data to the isolated SPAM zone
+        ops.append(("syndromes", read, merge))           # 493 nm readout there, its own step (light kept off the data)
+        ops.append(("from_spam", read))                  # shuttle back in from the SPAM zone once read
         if rnd < rounds - 1:
             ops += [("reset", layer) for layer in reversed(layers)]
             ops.append(("reset_done", rnd))
@@ -631,6 +635,7 @@ BEAT_KIND = {
     "merge+gate": "gate", "rotate": "swap_rotation", "merge": "merge_split", "split": "merge_split",
     "shuttle-through-SPAM": "shuttle", "drop": "shuttle", "settle": "shuttle",
     "shuttle-to-junction": "shuttle", "shuttle-to-park": "shuttle", "shuttle-from-park": "shuttle",
+    "shuttle-to-SPAM": "shuttle", "shuttle-from-SPAM": "shuttle",
     "shuttle-home": "shuttle", "junction-descent": "junction", "junction-ascent": "junction",
     "lift": "junction", "read": "measure", "herald": "herald",
 }
@@ -666,6 +671,8 @@ def op_ions(d: int, op) -> set:
         return {("a", s) for s, rc in op[2]} | {("d", rc) for s, rc in op[2]}
     if v in ("readout", "reset"):
         return {("a", s) for s, rc in op[1]} | {("d", rc) for s, rc in op[1]}
+    if v in ("to_spam", "from_spam", "syndromes"):
+        return {("a", s) for s in op[1]}
     if v in ("xlift", "xlower"):
         return {("a", s) for s, c, ac, tr in op[2]}
     if v == "xdrop":
