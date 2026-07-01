@@ -130,6 +130,33 @@ def place(d: int) -> list:
     return cells
 
 
+# --- SCHEDULE  (the heart of Layer 4) --------------------------------------
+def stab_cell(d: int) -> dict:
+    """Which cell each ancilla lives in, read from the placement."""
+    m = {}
+    for i, cell in enumerate(place(d)):
+        for kind, item in cell:
+            if kind == "anc":
+                m[item] = i
+    return m
+
+
+def cross_gates(d: int) -> list:
+    """Every cross-row gate, as (step, ancilla, junction). A cross-row gate
+    reads a data qubit in a neighbour cell, so its ancilla crosses through the
+    junction at that data's column, on the boundary between the two cells."""
+    cellof = stab_cell(d)
+    out = []
+    for stab in build_stabilizers(d):
+        home = cellof[stab]
+        for (r, c) in stab.data:
+            if r != home:                        # data sits in a neighbour cell
+                step = corner_step(stab, (r, c))
+                junction = (c, min(home, r))     # (column, boundary)
+                out.append((step, stab, junction))
+    return out
+
+
 # --- AUDIT #1: counts are right, at every distance -------------------------
 def check_census(d: int) -> None:
     """Check 1: are the counts right? Works at any d."""
@@ -201,6 +228,16 @@ def check_placement(d: int) -> None:
     assert len(anc_seen) == d*d-1, f"placed {len(anc_seen)} checks, want {d*d-1}"
 
 
+# --- AUDIT #5: cross-row transits do not fight for a junction ---------------
+def check_junctions(d: int) -> None:
+    """Check 5: in one step, no two cross-row gates use the same junction."""
+    used = {0: set(), 1: set(), 2: set(), 3: set()}
+    for step, stab, junction in cross_gates(d):
+        assert junction not in used[step], \
+            f"d={d}, step {step}: two gates want junction {junction}"
+        used[step].add(junction)
+
+
 # --- RUN -------------------------------------------------------------------
 # Run the checks. Print pass or fail.
 if __name__ == "__main__":
@@ -215,7 +252,9 @@ if __name__ == "__main__":
         print("d=3 vs simulator .... PASS")
         check_placement(3)
         print("placement (d=3) ..... PASS")
-        print("\nLayer 3 done (d=3). Next: Layer 4 -- schedule the moves.")
+        check_junctions(3)
+        print("junctions (d=3) ..... PASS")
+        print("\nLayer 4 started (d=3). Next: readout and the full no-pass check.")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
