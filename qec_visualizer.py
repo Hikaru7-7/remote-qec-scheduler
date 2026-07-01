@@ -229,12 +229,17 @@ const W=DATA.xhi,H=DATA.celly[DATA.celly.length-1]+70;
 svg.setAttribute("viewBox","0 0 "+W+" "+H);
 const gZ=E("g",{}),gWell=E("g",{}),gJ=E("g",{}),gW=E("g",{}),gI=E("g",{});
 svg.appendChild(gZ);svg.appendChild(gWell);svg.appendChild(gJ);svg.appendChild(gW);svg.appendChild(gI);
-DATA.celly.forEach((y,ci)=>{const t=E("text",{x:DATA.xlo+2,y:y-27,"font-size":11,fill:"var(--mut)"});t.textContent="cell "+ci;gZ.appendChild(t);});
+DATA.celly.forEach((y,ci)=>{
+ gZ.appendChild(E("rect",{x:DATA.xlo,y:y-24,width:W-DATA.xlo-20,height:48,rx:10,fill:"none",stroke:"var(--line)","stroke-dasharray":"5 4",opacity:.55}));
+ const t=E("text",{x:DATA.xlo+5,y:y-31,"font-size":11,fill:"var(--mut)"});t.textContent="cell "+ci;gZ.appendChild(t);});
 (DATA.wells||[]).forEach(w=>{gWell.appendChild(E("rect",{x:w[0]-22,y:w[1]-19,width:44,height:38,rx:10,fill:"var(--panel)",stroke:"var(--line)","stroke-width":1.2}));});
-const jel={};DATA.junctions.forEach(j=>{const jy=(j.y1+j.y2)/2;
- gJ.appendChild(E("line",{x1:j.x,y1:j.y1+21,x2:j.x,y2:j.y2-21,stroke:"var(--line)","stroke-width":3,opacity:.4,"stroke-linecap":"round"}));
- const g=E("g",{});g.appendChild(E("line",{x1:j.x-7,y1:jy,x2:j.x+7,y2:jy,stroke:"var(--line)","stroke-width":2}));
- g.appendChild(E("line",{x1:j.x,y1:jy-7,x2:j.x,y2:jy+7,stroke:"var(--line)","stroke-width":2}));gJ.appendChild(g);jel[j.c+"_"+j.b]=g;});
+const jel={};DATA.junctions.forEach(j=>{
+ // the lane is the routing channel; the actual junctions are where it meets a cell.
+ const lane=E("line",{x1:j.x,y1:j.y1+24,x2:j.x,y2:j.y2-24,stroke:"var(--line)","stroke-width":2.5,opacity:.5,"stroke-linecap":"round"});
+ gJ.appendChild(lane);
+ gJ.appendChild(E("circle",{cx:j.x,cy:j.y1+24,r:3.4,fill:"var(--mut)"}));   // junction: lane meets cell b
+ gJ.appendChild(E("circle",{cx:j.x,cy:j.y2-24,r:3.4,fill:"var(--mut)"}));   // junction: lane meets cell b+1
+ jel[j.c+"_"+j.b]=lane;});
 const el={};for(const id in DATA.ions){const lab=DATA.ions[id][0],typ=DATA.ions[id][1],g=E("g",{});g.style.transition="transform .25s ease";
  if(typ==="data"){g.appendChild(E("circle",{cx:0,cy:0,r:15,fill:"var(--panel)",stroke:"var(--line)","stroke-width":1.4}));
   const t=E("text",{x:0,y:4,"text-anchor":"middle","font-size":10,fill:"var(--ink)"});t.textContent=lab;g.appendChild(t);el[id]={g};}
@@ -249,8 +254,8 @@ function verify(f){const mg=new Set((f.merged||[]).map(p=>p.join("|"))),by={};
 let step=0;function render(){const f=DATA.frames[step];
  $("cap").textContent=f.cap;$("badge").textContent=f.badge||"";$("sname").textContent=(step+1)+" / "+DATA.frames.length;$("slider").value=step;
  const v=verify(f),ve=$("verify");if(v){ve.textContent="⚠ overlap "+v;ve.classList.add("bad");}else{ve.textContent="✓ no overlap";ve.classList.remove("bad");}
- for(const k in jel)jel[k].querySelectorAll("line").forEach(l=>{l.setAttribute("stroke","var(--line)");l.setAttribute("stroke-width",2);});
- (f.junc||[]).forEach(j=>{const k=j[0]+"_"+j[1];if(jel[k])jel[k].querySelectorAll("line").forEach(l=>{l.setAttribute("stroke","var(--amber)");l.setAttribute("stroke-width",3);});});
+ for(const k in jel){jel[k].setAttribute("stroke","var(--line)");jel[k].setAttribute("stroke-width",2.5);jel[k].setAttribute("opacity",.5);}
+ (f.junc||[]).forEach(j=>{const k=j[0]+"_"+j[1];if(jel[k]){jel[k].setAttribute("stroke","var(--amber)");jel[k].setAttribute("stroke-width",4);jel[k].setAttribute("opacity",1);}});
  while(gW.firstChild)gW.removeChild(gW.firstChild);
  (f.merged||[]).forEach(pr=>{const a=f.pos[pr[0]],b=f.pos[pr[1]];if(!a||!b)return;
   const x=Math.min(a[0],b[0])-20,y=Math.min(a[1],b[1])-19,w=Math.abs(a[0]-b[0])+40,h=Math.abs(a[1]-b[1])+38;
