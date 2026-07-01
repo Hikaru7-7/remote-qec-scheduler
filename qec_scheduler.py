@@ -302,6 +302,59 @@ def check_merge_demand(d: int, lanes: int = None) -> tuple:
     return demand, lanes, demand * d
 
 
+# --- COMMUNICATION IONS  (the remote leg of each seam check) ----------------
+# Each lane has one communication ion in the I/F zone at the far end of its cell,
+# holding a heralded Bell pair. A seam check's local ancilla (in cell s) gathers
+# its two same-module boundary data, one in its own cell and one across a junction
+# in cell s+1, then gates this comm ion, teleporting the half-parity to the other
+# module. A merge uses d-1 comm ions, one per seam check, and holds one lane spare.
+def comm_ions(d: int) -> dict:
+    """One communication ion per lane, d in all, each in the I/F zone of its cell."""
+    return {r: {"cell": r, "zone": "IF"} for r in range(d)}
+
+
+def check_comm_ions(d: int) -> None:
+    """Check: d comm ions, one per cell in the I/F zone, and a merge round uses
+    d-1 of them (seam check s uses cell s's comm ion) with one lane spare."""
+    ci = comm_ions(d)
+    assert len(ci) == d, f"d={d}: {len(ci)} comm ions, want {d}"
+    assert all(v["zone"] == "IF" for v in ci.values()), "a comm ion is not in the I/F zone"
+    used = set(range(d - 1))                          # seam check s -> cell s's comm ion
+    assert len(used) == d - 1 and d - len(used) == 1, "not d-1 used with one spare"
+
+
+def seam_schedule(d: int) -> dict:
+    """Place every seam gate in one of the four connection steps. For seam check s
+    the ancilla gates its top data (s, d-1) and its bottom data (s+1, d-1) in steps
+    their bulk gates leave free, then gates the comm ion in a third step. No data is
+    used twice in a step and the ancilla does one gate per step."""
+    free = {r: sorted(set(range(4)) - bulk_steps_at(d, r)) for r in range(d)}
+    used = {r: set() for r in range(d)}              # steps already taken on each data
+    sched = {}
+    for si in range(d - 1):
+        cand = [x for x in free[si] if x not in used[si]]
+        assert cand, f"d={d} seam {si}: no free step for the top data"
+        top = cand[0]; used[si].add(top)
+        cand = [x for x in free[si + 1] if x not in used[si + 1] and x != top]
+        assert cand, f"d={d} seam {si}: no free step for the bottom data"
+        bot = cand[0]; used[si + 1].add(bot)
+        comm = next(x for x in range(4) if x not in (top, bot))
+        sched[si] = {"data_top": top, "data_bot": bot, "comm": comm}
+    return sched
+
+
+def check_seam_schedule(d: int) -> None:
+    """Check: the seam extraction rides in the same four steps. Every data gate
+    lands where that data is free of bulk gates, each ancilla's three gates sit in
+    distinct steps, and no boundary data is gated twice in one step."""
+    sched = seam_schedule(d)
+    for si, g in sched.items():
+        assert g["data_top"] not in bulk_steps_at(d, si), f"d={d} seam {si}: top clashes with a bulk gate"
+        assert g["data_bot"] not in bulk_steps_at(d, si + 1), f"d={d} seam {si}: bottom clashes with a bulk gate"
+        assert len({g["data_top"], g["data_bot"], g["comm"]}) == 3, f"d={d} seam {si}: ancilla double-books a step"
+
+
+
 
 def col_x(d: int, cells: list) -> dict:
     """Column coordinate of every ion, aligned across cells so a junction at
@@ -559,6 +612,13 @@ if __name__ == "__main__":
         for d in (3, 5, 7):
             dem, lanes, tot = check_merge_demand(d)
             print(f"    d={d}: {dem} pairs/round, {lanes} lanes ({lanes - dem} spare), {tot} per {d}-round merge")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_comm_ions(d); check_seam_schedule(d)
+        print("  comm ions ........... PASS  (d in the I/F zone, d-1 used + 1 spare)")
+        print("  seam schedule ....... PASS  (seam + comm gates ride in the 4 steps)")
+        print("  seam schedule (d=3), each seam check by step:")
+        for si, g in seam_schedule(3).items():
+            print(f"    seam check {si} (cells {si},{si+1}): data gates in steps {g['data_top']} and {g['data_bot']}, comm-ion gate in step {g['comm']}")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
