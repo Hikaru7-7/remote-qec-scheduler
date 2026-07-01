@@ -28,8 +28,11 @@ CELL = stab_cell(D)
 
 # ----- geometry -------------------------------------------------------------
 CY = {0: 90, 1: 220, 2: 350}                       # y-pixel of each cell axis
-def X(col): return 165 + (col + 0.5) * 95.0        # x-pixel of a column
+XS = 150.0                                         # column pitch (wide enough to leave gaps)
+def X(col): return 185 + (col + 0.5) * XS          # x-pixel of a column
 def gap_y(a, b): return (CY[a] + CY[b]) / 2        # gate-zone strip between cells
+def JX(c): return X(c) + XS / 4                    # junction sits at the MIDPOINT between two
+#                                                    wells, so it is on top of neither ion
 
 def data_col(n):  return (n - 1) % D               # column of data qubit n (1..9)
 def data_row(n):  return (n - 1) // D
@@ -67,7 +70,7 @@ ID_OF_DATA = {(data_row(n), data_col(n)): "d%d" % n for n in range(1, D * D + 1)
 # ----- frame engine ---------------------------------------------------------
 pos = {i: home[i][:] for i in ions}
 FR = []
-MG = 14                                            # small merge offset (px)
+IW = 11                                            # in-well half-offset: two ions side by side in one well
 def snap(cap, hi=None, junc=None, badge="", merged=None):
     FR.append({"pos": {i: pos[i][:] for i in pos}, "cap": cap,
                "hi": hi or [], "junc": junc or [], "badge": badge,
@@ -92,45 +95,48 @@ snap("The X-check ancillas get a microwave pi/2 to |+>.",
 for step in range(D + 1) if False else range(4):
     L = step + 1
     inrow, cross = gates(step)
-    # in-row gates all fire together (each in its own gate well, adjacent data)
+    # in-row gates: the ancilla steps INTO its data's well; the two sit side by
+    # side in that one well while the gate fires, then both step back.
     if inrow:
         for a, d, _, _, _ in inrow:
-            ax, dx = pos[a][0], pos[d][0]
-            setp(a, dx + (MG if ax > dx else -MG), pos[d][1])   # slide beside the data
+            wx, wy = home[d][0], home[d][1]
+            setp(d, wx - IW, wy); setp(a, wx + IW, wy)         # both ions inside the one well
         mp = [(a, d) for a, d, _, _, _ in inrow]
-        snap(f"Step {L}: in-row ancillas merge with their data.", hi=[a for a, *_ in inrow], merged=mp)
-        snap(f"Step {L}: the in-row two-qubit gates fire.", hi=[a for a, *_ in inrow], merged=mp)
-        for a, *_ in inrow:
-            setp(a, home[a][0], home[a][1])
-        snap(f"Step {L}: split.", hi=[a for a, *_ in inrow])
-    # cross-row gates fire in parallel: swap onto the target column, lift through
-    # the junction into the gate zone, gate beside the data, return.
+        snap(f"Step {L}: each in-row ancilla steps into its data's well.", hi=[a for a, *_ in inrow], merged=mp)
+        snap(f"Step {L}: the two-qubit gate fires inside the well.", hi=[a for a, *_ in inrow], merged=mp)
+        for a, d, _, _, _ in inrow:
+            setp(d, home[d][0], home[d][1]); setp(a, home[a][0], home[a][1])
+        snap(f"Step {L}: both step back to their own wells.", hi=[a for a, *_ in inrow])
+    # cross-row gates: swap the ancilla into the target-column well, lift it
+    # THROUGH the junction (in the gap), and land it IN the data's well of the
+    # next cell, where the gate fires; then reverse every step.
     if cross:
-        for a, d, ac, tr, c in cross:                          # swap onto target column
+        for a, d, ac, tr, c in cross:                          # swap ancilla into the target-column well
             dcol_id = ID_OF_DATA[(ac, c)]
             ax, dx = pos[a][0], pos[dcol_id][0]
             setp(a, dx, pos[a][1]); setp(dcol_id, ax, pos[a][1])
-        snap(f"Step {L}: cross-row ancillas swap onto the target column (adjacent, nothing passes).",
+        snap(f"Step {L}: cross-row ancillas swap into the target-column well (well to well).",
              hi=[a for a, *_ in cross])
-        for a, d, ac, tr, c in cross:                          # lift into the gate zone
-            setp(a, X(c), gap_y(ac, tr))
-        snap(f"Step {L}: they lift through the column junction into the gate zone.",
+        for a, d, ac, tr, c in cross:                          # lift into the junction, in the gap
+            setp(a, JX(c), gap_y(ac, tr))
+        snap(f"Step {L}: they lift into the junction, which sits in the gap between wells.",
              hi=[a for a, *_ in cross], junc=[(c, min(ac, tr)) for a, d, ac, tr, c in cross],
              badge="in transit")
-        for a, d, ac, tr, c in cross:                          # gate beside the data
-            setp(a, X(c) + MG, CY[tr])
-        snap(f"Step {L}: each meets its data at a gate well and the cross-row gate fires.",
+        for a, d, ac, tr, c in cross:                          # land IN the data's well of the next cell
+            tid = ID_OF_DATA[(tr, c)]
+            setp(tid, X(c) - IW, CY[tr]); setp(a, X(c) + IW, CY[tr])
+        snap(f"Step {L}: each lands in its data's well; the gate fires there, on the junction side.",
              hi=[a for a, *_ in cross],
              merged=[(a, ID_OF_DATA[(tr, c)]) for a, d, ac, tr, c in cross])
-        for a, d, ac, tr, c in cross:                          # lift back
-            setp(a, X(c), gap_y(ac, tr))
-        snap(f"Step {L}: split, back into the junction.",
+        for a, d, ac, tr, c in cross:                          # data recentres, ancilla lifts back to the junction
+            setp(ID_OF_DATA[(tr, c)], X(c), CY[tr]); setp(a, JX(c), gap_y(ac, tr))
+        snap(f"Step {L}: gate done; the ancilla lifts back into the junction.",
              hi=[a for a, *_ in cross], junc=[(c, min(ac, tr)) for a, d, ac, tr, c in cross])
-        for a, d, ac, tr, c in cross:                          # home, swap back
+        for a, d, ac, tr, c in cross:                          # drop back into the home well, then swap back
             setp(a, X(c), CY[ac])
             dcol_id = ID_OF_DATA[(ac, c)]
             setp(a, home[a][0], home[a][1]); setp(dcol_id, X(c), CY[ac])
-        snap(f"Step {L}: swap back, chain order restored.", hi=[a for a, *_ in cross])
+        snap(f"Step {L}: swap back; the chain order is restored.", hi=[a for a, *_ in cross])
 
 # readout: bubble every ancilla to the SPAM (right) end of its cell
 order = [[it for it in cell] for cell in CHAINS]
@@ -178,8 +184,6 @@ def bad_frame(f):
 
 # junction marks: OFFSET from the data columns (a routing lane between wells),
 # in the gap between adjacent cells. Ions transit through them, never rest on them.
-JOFF = 30
-def JX(c): return X(c) + JOFF                       # junction lane, offset from data col c
 JUNC = [{"c": c, "b": b, "x": JX(c), "y1": CY[b], "y2": CY[b + 1]}
         for c in range(D) for b in range(D - 1)]
 
@@ -223,9 +227,10 @@ const NS="http://www.w3.org/2000/svg",E=(t,a)=>{const e=document.createElementNS
 const $=i=>document.getElementById(i),svg=$("stage");
 const W=DATA.xhi,H=DATA.celly[DATA.celly.length-1]+70;
 svg.setAttribute("viewBox","0 0 "+W+" "+H);
-const gZ=E("g",{}),gJ=E("g",{}),gI=E("g",{});svg.appendChild(gZ);svg.appendChild(gJ);svg.appendChild(gI);
-DATA.celly.forEach((y,ci)=>{gZ.appendChild(E("rect",{x:DATA.xlo,y:y-21,width:W-DATA.xlo-28,height:42,rx:8,fill:"none",stroke:"var(--line)","stroke-dasharray":"4 4"}));
- const t=E("text",{x:DATA.xlo+6,y:y-27,"font-size":11,fill:"var(--mut)"});t.textContent="cell "+ci;gZ.appendChild(t);});
+const gZ=E("g",{}),gWell=E("g",{}),gJ=E("g",{}),gW=E("g",{}),gI=E("g",{});
+svg.appendChild(gZ);svg.appendChild(gWell);svg.appendChild(gJ);svg.appendChild(gW);svg.appendChild(gI);
+DATA.celly.forEach((y,ci)=>{const t=E("text",{x:DATA.xlo+2,y:y-27,"font-size":11,fill:"var(--mut)"});t.textContent="cell "+ci;gZ.appendChild(t);});
+(DATA.wells||[]).forEach(w=>{gWell.appendChild(E("rect",{x:w[0]-22,y:w[1]-19,width:44,height:38,rx:10,fill:"var(--panel)",stroke:"var(--line)","stroke-width":1.2}));});
 const jel={};DATA.junctions.forEach(j=>{const jy=(j.y1+j.y2)/2;
  gJ.appendChild(E("line",{x1:j.x,y1:j.y1+21,x2:j.x,y2:j.y2-21,stroke:"var(--line)","stroke-width":3,opacity:.4,"stroke-linecap":"round"}));
  const g=E("g",{});g.appendChild(E("line",{x1:j.x-7,y1:jy,x2:j.x+7,y2:jy,stroke:"var(--line)","stroke-width":2}));
@@ -246,6 +251,11 @@ let step=0;function render(){const f=DATA.frames[step];
  const v=verify(f),ve=$("verify");if(v){ve.textContent="⚠ overlap "+v;ve.classList.add("bad");}else{ve.textContent="✓ no overlap";ve.classList.remove("bad");}
  for(const k in jel)jel[k].querySelectorAll("line").forEach(l=>{l.setAttribute("stroke","var(--line)");l.setAttribute("stroke-width",2);});
  (f.junc||[]).forEach(j=>{const k=j[0]+"_"+j[1];if(jel[k])jel[k].querySelectorAll("line").forEach(l=>{l.setAttribute("stroke","var(--amber)");l.setAttribute("stroke-width",3);});});
+ while(gW.firstChild)gW.removeChild(gW.firstChild);
+ (f.merged||[]).forEach(pr=>{const a=f.pos[pr[0]],b=f.pos[pr[1]];if(!a||!b)return;
+  const x=Math.min(a[0],b[0])-20,y=Math.min(a[1],b[1])-19,w=Math.abs(a[0]-b[0])+40,h=Math.abs(a[1]-b[1])+38;
+  gW.appendChild(E("rect",{x:x,y:y,width:w,height:h,rx:11,fill:"var(--purple)","fill-opacity":.10,stroke:"var(--purple)","stroke-width":1.8,"stroke-dasharray":"5 3"}));
+  const t=E("text",{x:x+w/2,y:y-5,"text-anchor":"middle","font-size":9.5,fill:"var(--purple)","font-weight":600});t.textContent="gate well";gW.appendChild(t);});
  for(const id in el){const p=f.pos[id];if(p)el[id].g.setAttribute("transform","translate("+p[0]+","+p[1]+")");
   if(el[id].rc){const on=f.hi.indexOf(id)>=0;el[id].rc.setAttribute("stroke-width",on?2.6:1);el[id].rc.setAttribute("stroke",on?"var(--amber)":el[id].dk);}}
  $("prev").disabled=step===0;$("next").disabled=step===DATA.frames.length-1;}
@@ -263,7 +273,8 @@ render();
 def write_html(path):
     data = {"ions": {i: [ions[i]["lab"], ions[i]["type"]] for i in ions},
             "frames": FR, "celly": [CY[0], CY[1], CY[2]], "junctions": JUNC,
-            "xlo": X(-0.5) - 45, "xhi": X(D - 0.5) + 55}
+            "wells": [home[i] for i in ions],
+            "xlo": X(-0.5) - 45, "xhi": X(D - 0.5) + 60}
     with open(path, "w") as f:
         f.write(HTML.replace("__DATA__", json.dumps(data)))
 
