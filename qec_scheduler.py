@@ -101,33 +101,47 @@ def assign_steps(d: int) -> dict:
 
 
 # --- PLACE  (the heart of Layer 3) -----------------------------------------
-# The hand-checked d=3 layout: one code row per cell, data interleaved with the
-# ancillas that read them. A number is a data qubit (1..9); a set is an ancilla,
-# named by the data it reads. (General-d placement is a later pass.)
-D3_CELLS = [
-    [frozenset({1, 4}), 1, frozenset({1, 2, 4, 5}), 2, frozenset({2, 3, 5, 6}), 3, frozenset({2, 3})],
-    [4, frozenset({4, 5, 7, 8}), 5, frozenset({5, 6, 8, 9}), 6],
-    [7, frozenset({7, 8}), 8, frozenset({6, 9}), 9],
-]
-
-
+# One code row per cell, laid out as a 1-D chain:
+#   left-end, data0, gap0, data1, gap1, ... , data_{d-1}, right-end.
+# Data sit at odd slots; ancillas fill the gaps and the two ends.
+#
+# Balanced rule (keeps every cell to at most d ancillas):
+#   bulk block (r,c): even column -> stay in row r, odd column -> drop to row r+1.
+#     This frees each gap in row 0 for a top edge check, and each gap in the last
+#     row for a bottom edge check.
+#   top/bottom edge check: sits in the gap between its two data.
+#   left/right edge check: sits at the left/right end of its top row.
+# Result: every gap holds one ancilla, and the d-1 side checks go to ends,
+# one per cell, giving per-cell counts d, d, ..., d, d-1.
 def place(d: int) -> list:
     """Put each qubit in a well. Returns a list of cells; each cell is an
-    ordered list of items. An item is ("data", (r,c)) or ("anc", check)."""
-    if d != 3:
-        raise NotImplementedError("placement is d=3 only for now")
-    by_nums = {frozenset(num(rc, 3) for rc in s.data): s
-               for s in build_stabilizers(3)}
-    cells = []
-    for chain in D3_CELLS:
-        cell = []
-        for item in chain:
-            if isinstance(item, int):                 # data qubit, by its number
-                cell.append(("data", ((item - 1) // 3, (item - 1) % 3)))
-            else:                                     # ancilla, by the data it reads
-                cell.append(("anc", by_nums[item]))
-        cells.append(cell)
-    return cells
+    ordered list of ("data", (r,c)) or ("anc", check)."""
+    slots = [dict() for _ in range(d)]            # cell -> {slot: item}
+
+    def put(cell, slot, item):
+        assert slot not in slots[cell], f"d={d}: two ions want cell {cell} slot {slot}"
+        slots[cell][slot] = item
+
+    for r in range(d):                            # data (r,c) -> cell r, slot 2c+1
+        for c in range(d):
+            put(r, 2 * c + 1, ("data", (r, c)))
+
+    LEFT, RIGHT = 0, 2 * d                         # the two end slots
+    for s in build_stabilizers(d):
+        rs = sorted({r for r, c in s.data})
+        cs = sorted({c for r, c in s.data})
+        if s.weight == 4:                                 # bulk block (r,c)
+            r, c = rs[0], cs[0]
+            home = r if c % 2 == 0 else r + 1             # even col up, odd col down
+            put(home, 2 * c + 2, ("anc", s))              # the gap at column c
+        elif len(rs) == 1:                                # top/bottom edge (one row)
+            r, c = rs[0], cs[0]
+            put(r, 2 * c + 2, ("anc", s))                 # the gap between its two data
+        else:                                             # left/right edge (one column)
+            r, c = rs[0], cs[0]
+            put(r, LEFT if c == 0 else RIGHT, ("anc", s)) # an end of the top row
+
+    return [[slots[i][s] for s in sorted(slots[i])] for i in range(d)]
 
 
 # --- SCHEDULE  (the heart of Layer 4) --------------------------------------
@@ -154,6 +168,55 @@ def cross_gates(d: int) -> list:
                 step = corner_step(stab, (r, c))
                 junction = (c, min(home, r))     # (column, boundary)
                 out.append((step, stab, junction))
+    return out
+
+
+# --- SIMULATE  (Layer 4: run the moves and count the steps) ----------------
+def readout_layers(cells: list) -> int:
+    """Bubble every ancilla to the SPAM end (right) of its cell with adjacent
+    swaps, in parallel layers, and count the layers. Each swap exchanges an
+    ancilla with the data on its right, so nothing passes. A cell with more
+    ancillas, or ancillas further from the end, needs more layers."""
+    cells = [list(c) for c in cells]              # mutable copy
+
+    def done(c):                                  # all data before all ancillas?
+        saw_anc = False
+        for kind, _ in c:
+            if kind == "anc":
+                saw_anc = True
+            elif saw_anc:
+                return False
+        return True
+
+    layers = 0
+    while not all(done(c) for c in cells):
+        for c in cells:                           # one parallel layer per cell
+            i = 0
+            while i < len(c) - 1:
+                if c[i][0] == "anc" and c[i + 1][0] == "data":
+                    c[i], c[i + 1] = c[i + 1], c[i]
+                    i += 2                         # non-overlapping swaps
+                else:
+                    i += 1
+        layers += 1
+    return layers
+
+
+def hand_422() -> list:
+    """The earlier hand-built d=3 layout, per-cell {4,2,2}, kept for comparison."""
+    by = {frozenset(num(rc, 3) for rc in s.data): s for s in build_stabilizers(3)}
+    chains = [
+        [frozenset({1, 4}), 1, frozenset({1, 2, 4, 5}), 2, frozenset({2, 3, 5, 6}), 3, frozenset({2, 3})],
+        [4, frozenset({4, 5, 7, 8}), 5, frozenset({5, 6, 8, 9}), 6],
+        [7, frozenset({7, 8}), 8, frozenset({6, 9}), 9],
+    ]
+    out = []
+    for ch in chains:
+        cell = []
+        for it in ch:
+            cell.append(("data", ((it - 1) // 3, (it - 1) % 3)) if isinstance(it, int)
+                        else ("anc", by[it]))
+        out.append(cell)
     return out
 
 
@@ -250,11 +313,21 @@ if __name__ == "__main__":
         print("no qubit used twice . PASS  (d = 3,5,7,9,11)")
         check_d3_matches_reference()
         print("d=3 vs simulator .... PASS")
-        check_placement(3)
-        print("placement (d=3) ..... PASS")
-        check_junctions(3)
-        print("junctions (d=3) ..... PASS")
-        print("\nLayer 4 started (d=3). Next: readout and the full no-pass check.")
+        for d in (3, 5, 7, 9, 11):
+            check_placement(d)
+        print("placement ........... PASS  (d = 3,5,7,9,11)")
+        for d in (3, 5, 7, 9, 11):
+            check_junctions(d)
+        print("junctions ........... PASS  (d = 3,5,7,9,11)")
+        for d in (3, 5, 7):
+            counts = [sum(1 for k, _ in cell if k == "anc") for cell in place(d)]
+            print(f"  d={d}: per-cell ancillas = {counts}  (max {max(counts)}, total {sum(counts)})")
+        print("readout depth (swap layers to the SPAM end):")
+        print(f"  d=3 balanced {{3,3,2}} : {readout_layers(place(3))} layers")
+        print(f"  d=3 hand     {{4,2,2}} : {readout_layers(hand_422())} layers")
+        for d in (5, 7):
+            print(f"  d={d} balanced         : {readout_layers(place(d))} layers")
+        print("\nLayer 4 in progress. Next: the connection-step moves (in-row + cross-row).")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:
