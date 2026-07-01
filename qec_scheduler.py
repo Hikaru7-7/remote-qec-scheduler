@@ -323,35 +323,66 @@ def check_comm_ions(d: int) -> None:
     assert len(used) == d - 1 and d - len(used) == 1, "not d-1 used with one spare"
 
 
+def comm_pool_per_lane() -> int:
+    """Continuous heralding needs at least two comm ions per active lane: one out
+    on its excursion delivering a pair (down to the gate zone, across a junction,
+    and back), one at the cavity heralding the next. The exact number is set by the
+    delivery-to-herald time ratio in Chapter 5; structurally the I/F area is a small
+    pool, not a single ion."""
+    return 2
+
+
+def bulk_junction_use(d: int) -> set:
+    """Which (junction, step) the surviving bulk cross-row gates take in a merge.
+    The right-boundary checks are off, so only the weight-4 bulk crossings run."""
+    return {(j, step) for step, stab, j in cross_gates(d) if stab.weight == 4}
+
+
 def seam_schedule(d: int) -> dict:
-    """Place every seam gate in one of the four connection steps. For seam check s
-    the ancilla gates its top data (s, d-1) and its bottom data (s+1, d-1) in steps
-    their bulk gates leave free, then gates the comm ion in a third step. No data is
-    used twice in a step and the ancilla does one gate per step."""
-    free = {r: sorted(set(range(4)) - bulk_steps_at(d, r)) for r in range(d)}
-    used = {r: set() for r in range(d)}              # steps already taken on each data
+    """Place each seam check's two comm-ion gates in the four steps. Seam check s's
+    comm ion gates its same-cell data (row s), then crosses the junction at column
+    d-1 into the next cell to gate its cross-cell data (row s+1). The same-cell gate
+    needs its data free of bulk gates; the cross-cell gate needs its data free AND
+    that junction free of bulk crossings; the two take distinct steps, and no data
+    or junction is used twice."""
+    jbusy = bulk_junction_use(d)
+    dfree = {r: set(range(4)) - bulk_steps_at(d, r) for r in range(d)}
+    dused = {r: set() for r in range(d)}
+    jused = set()
     sched = {}
-    for si in range(d - 1):
-        cand = [x for x in free[si] if x not in used[si]]
-        assert cand, f"d={d} seam {si}: no free step for the top data"
-        top = cand[0]; used[si].add(top)
-        cand = [x for x in free[si + 1] if x not in used[si + 1] and x != top]
-        assert cand, f"d={d} seam {si}: no free step for the bottom data"
-        bot = cand[0]; used[si + 1].add(bot)
-        comm = next(x for x in range(4) if x not in (top, bot))
-        sched[si] = {"data_top": top, "data_bot": bot, "comm": comm}
+    for s in range(d - 1):
+        jc = (d - 1, s)                                  # the junction this comm ion crosses
+        jfree = {st for st in range(4) if (jc, st) not in jbusy and (jc, st) not in jused}
+        found = None
+        for same in sorted(dfree[s] - dused[s]):
+            for cross in sorted((dfree[s + 1] - dused[s + 1]) & jfree):
+                if cross != same:
+                    found = (same, cross)
+                    break
+            if found:
+                break
+        assert found, f"d={d} seam {s}: no free step pair (same-cell, cross-cell through junction)"
+        same, cross = found
+        dused[s].add(same); dused[s + 1].add(cross); jused.add((jc, cross))
+        sched[s] = {"same": same, "cross": cross, "junction": jc}
     return sched
 
 
 def check_seam_schedule(d: int) -> None:
-    """Check: the seam extraction rides in the same four steps. Every data gate
-    lands where that data is free of bulk gates, each ancilla's three gates sit in
-    distinct steps, and no boundary data is gated twice in one step."""
+    """Check: the seam extraction still rides in the four steps once the comm ion
+    has to cross a junction. Each gate lands where its data is free of bulk gates,
+    the cross-cell gate's junction is free of bulk crossings, and no data or junction
+    is used twice in a step."""
     sched = seam_schedule(d)
-    for si, g in sched.items():
-        assert g["data_top"] not in bulk_steps_at(d, si), f"d={d} seam {si}: top clashes with a bulk gate"
-        assert g["data_bot"] not in bulk_steps_at(d, si + 1), f"d={d} seam {si}: bottom clashes with a bulk gate"
-        assert len({g["data_top"], g["data_bot"], g["comm"]}) == 3, f"d={d} seam {si}: ancilla double-books a step"
+    jbusy = bulk_junction_use(d)
+    seen_j = set()
+    for s, g in sched.items():
+        assert g["same"] not in bulk_steps_at(d, s), f"d={d} seam {s}: same-cell gate clashes with a bulk gate"
+        assert g["cross"] not in bulk_steps_at(d, s + 1), f"d={d} seam {s}: cross-cell gate clashes with a bulk gate"
+        assert (g["junction"], g["cross"]) not in jbusy, f"d={d} seam {s}: comm ion clashes with a bulk crossing at a junction"
+        assert (g["junction"], g["cross"]) not in seen_j, f"d={d} seam {s}: two comm ions share a junction in a step"
+        assert g["same"] != g["cross"], f"d={d} seam {s}: comm ion double-books a step"
+        seen_j.add((g["junction"], g["cross"]))
 
 
 # --- CROWDING  (does a merge add ions to the cells? no) ---------------------
@@ -650,10 +681,11 @@ if __name__ == "__main__":
         print("  seam schedule ....... PASS  (seam + comm gates ride in the 4 steps)")
         print("  seam schedule (d=3), each seam check by step:")
         for si, g in seam_schedule(3).items():
-            print(f"    seam check {si} (cells {si},{si+1}): data gates in steps {g['data_top']} and {g['data_bot']}, comm-ion gate in step {g['comm']}")
+            print(f"    seam check {si} (cells {si},{si+1}): same-cell gate in step {g['same']}, cross-cell gate in step {g['cross']} through junction {g['junction']}")
         for d in (3, 5, 7, 9, 11, 15):
             check_merge_no_crowding(d)
         print("  merge crowding ...... PASS  (comm ions carry the seam; cells unchanged)")
+        print(f"  comm-ion pool ....... note: >= {comm_pool_per_lane()} per active lane so the cavity keeps heralding while one delivers (sized in Ch5)")
         for d in (3, 5, 7):
             print(f"    d={d}: cells stay {per_cell_ancillas(d)} (max {d}); a new seam ancilla per check would force max {netnew_busiest(d)}")
     except NotImplementedError as e:
