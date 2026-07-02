@@ -207,9 +207,11 @@ def build(merge=False, rounds=1, d=3):
                  junc=[(c, min(ac, tr)) for s, c, ac, tr in op[2]])
         elif v == "xdrop":
             L = op[1] + 1
-            for s, c, ac in op[2]:
-                setp(A(s), X(c), CY[ac])
-            snap(f"Step {L}: they drop back onto the target column.", hi=[A(s) for s, *_ in op[2]])
+            for s, c, ac, swapped in op[2]:
+                # a swapped crossing drops onto the column slot its swap opened;
+                # a junction-adjacent one drops back into its own well
+                setp(A(s), X(c) if swapped else home[A(s)][0], CY[ac])
+            snap(f"Step {L}: they drop back to the wells they lifted from.", hi=[A(s) for s, *_ in op[2]])
         elif v == "comm_out":
             L = op[1] + 1; lanes = op[2]; mode = op[3]
             tgt = (XIF + (cx if mode == "same" else JX(D - 1))) / 2

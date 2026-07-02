@@ -59,10 +59,13 @@ than take it on trust.
 
 ## Headline numbers to reproduce
 
-- Local round depth is exactly `27 + d` parallel time-steps at every distance.
-  A flat 24-step connection band, then a readout tail of `d + 3`. This is an
+- Local round depth is exactly `22 + d` parallel time-steps at every distance.
+  A flat 19-step connection band, then a readout tail of `d + 3`. This is an
   asserted check, not a printout.
-- The full d-round merge packs into 81, 180, and 280 time-steps at d = 3, 5, 7.
+- A cross-row ancilla swaps toward its junction only when a data ion blocks
+  the way; the junction-adjacent half of the crossings lift directly, and
+  those free lifts overlap the in-row gates. That is why the band is 19.
+- The full d-round merge packs into 75, 155, and 245 time-steps at d = 3, 5, 7.
 - Resources are closed forms. `d^2` data ions, `d^2 - 1` ancillas, `d` comm
   lanes, `d - 1` Bell pairs per merge round, `4d(d - 1)` two-qubit gates per
   round, `floor((d-1)/2)` park wells.

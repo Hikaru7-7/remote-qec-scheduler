@@ -479,8 +479,10 @@ def bottom_park_wells(d: int) -> int:
 # The schedule is not just which gate fires when, it is the ordered list of
 # physical moves the ions make. A gate is merge then split in a well. A swap is
 # merge, a 180-degree crystal rotation, then split, so it is three beats, not one.
-# A cross-row gate is swap-onto-column, lift into the junction, gate, lift back,
-# drop, swap-back. A comm ion delivers by shuttling out through the SPAM zone,
+# A cross-row gate lifts through the junction beside it, gates, and returns. It
+# first swaps onto the target column ONLY when a data ion sits between its well
+# and the junction mouth; the junction-adjacent half of the crossings lift
+# directly. A comm ion delivers by shuttling out through the SPAM zone,
 # gating, and shuttling back. round_ops emits this list; the visualizer only
 # assigns coordinates to it, so the animation and the schedule are the same object.
 BEATS = {                                              # sub-beats each operation takes
@@ -567,12 +569,21 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
             if inrow:
                 ops.append(("inrow", step, inrow))
             if cross:
-                ops.append(("swap", step, [(s, (cell[s], c)) for s, (r, c) in cross], "onto-column"))
+                # a crossing swaps only if a data ion sits between its well and
+                # its junction mouth at column c + 1/4; the rest lift directly
+                pos = col_x(d, place(d))
+                blocked = [(s, rc) for s, rc in cross
+                           if any(min(pos[s][1], rc[1] + 0.25) < cc < max(pos[s][1], rc[1] + 0.25)
+                                  for cc in range(d))]
+                bset = set(blocked)
+                if blocked:
+                    ops.append(("swap", step, [(s, (cell[s], c)) for s, (r, c) in blocked], "onto-column"))
                 ops.append(("xlift", step, [(s, c, cell[s], r) for s, (r, c) in cross]))
                 ops.append(("xgate", step, [(s, (r, c)) for s, (r, c) in cross]))
                 ops.append(("xlower", step, [(s, c, cell[s], r) for s, (r, c) in cross]))
-                ops.append(("xdrop", step, [(s, c, cell[s]) for s, (r, c) in cross]))
-                ops.append(("swap", step, [(s, (cell[s], c)) for s, (r, c) in cross], "back"))
+                ops.append(("xdrop", step, [(s, c, cell[s], (s, (r, c)) in bset) for s, (r, c) in cross]))
+                if blocked:
+                    ops.append(("swap", step, [(s, (cell[s], c)) for s, (r, c) in blocked], "back"))
             if merge:
                 sames = [l for l in lanes if sched[l]["same"] == step]
                 crss = [l for l in lanes if sched[l]["cross"] == step]
@@ -604,7 +615,7 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
 def check_round_ops(d: int) -> None:
     """Check: a local round's operations gate every (check, data) coupling exactly
     once, every op is a known verb, every swap lands on a real grid site, and the
-    packed round is exactly 27+d time-steps deep."""
+    packed round is exactly 22+d time-steps deep."""
     ops = round_ops(d, merge=False, rounds=1)
     for op in ops:
         assert op[0] in BEATS, f"d={d}: unknown operation {op[0]}"
@@ -616,8 +627,8 @@ def check_round_ops(d: int) -> None:
             for s, rc in op[2]:
                 assert isinstance(rc, tuple) and len(rc) == 2 and \
                     0 <= rc[0] < d and 0 <= rc[1] < d, f"d={d}: swap onto bad site {rc}"
-    # the packed local round is exactly 27+d deep: 24 connection + (d+3) readout
-    assert len(parallel_steps(d, merge=False)) == 27 + d, f"d={d}: round depth is not 27+d"
+    # the packed local round is exactly 22+d deep: 19 connection + (d+3) readout
+    assert len(parallel_steps(d, merge=False)) == 22 + d, f"d={d}: round depth is not 22+d"
     # a merge adds the seam: d-1 comm deliveries, each two gates (same + cross)
     m = round_ops(d, merge=True, rounds=1)
     cg = sum(len(op[2]) for op in m if op[0] == "comm_gate")
@@ -680,7 +691,7 @@ def op_ions(d: int, op) -> set:
     if v in ("xlift", "xlower"):
         return {("a", s) for s, c, ac, tr in op[2]}
     if v == "xdrop":
-        return {("a", s) for s, c, ac in op[2]}
+        return {("a", s) for s, c, ac, sw in op[2]}
     if v in ("comm_out", "comm_arrive", "comm_lift", "comm_lower"):
         return {("c", l) for l in op[2]}
     if v == "comm_back":
@@ -775,9 +786,10 @@ def _overlap(pos: dict, merged: set):
 
 
 def crossings_parallel_ok(d: int, step: int):
-    """Try to position ALL cross-row ancillas of one step at once: each swaps
-    with the in-row data at its target column, then transits (straight down its
-    column's junction) into the neighbour cell to merge. Return None if it is
+    """Try to position ALL cross-row ancillas of one step at once: one swaps
+    with the in-row data at its target column only if that data blocks its path
+    to the junction mouth, then every crossing transits (down its column's
+    junction) into the neighbour cell to merge. Return None if it is
     collision-free, else where it collides."""
     cells = place(d)
     pos = col_x(d, cells)
@@ -786,8 +798,10 @@ def crossings_parallel_ok(d: int, step: int):
               for s in build_stabilizers(d)
               for (r, c) in s.data
               if r != cellof[s] and corner_step(s, (r, c)) == step]
-    for a, home, tgt, c in moving:                    # swap-out (all together)
+    for a, home, tgt, c in moving:                    # swap-out (only if blocked)
         a_old = pos[a][1]
+        if not any(min(a_old, c + 0.25) < cc < max(a_old, c + 0.25) for cc in range(d)):
+            continue
         pos[a] = [home, c]
         pos[(home, c)] = [home, a_old]
     bad = _overlap(pos, set())
