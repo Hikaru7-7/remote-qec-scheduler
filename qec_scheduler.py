@@ -936,9 +936,8 @@ def check_junctions(d: int) -> None:
 
 # --- RUN -------------------------------------------------------------------
 # Run the checks. Print pass or fail.
-def report(d: int) -> None:
-    """Build and certify the whole schedule for one distance, and print its numbers.
-    Usage: python3 qec_scheduler.py 7   (d must be an odd integer >= 3)."""
+def certify(d: int) -> int:
+    """Run every structural check at one distance, quietly. Returns the count."""
     assert isinstance(d, int) and d >= 3 and d % 2 == 1, "d must be an odd integer >= 3"
     checks = [check_census, check_no_double_touch, check_placement, check_junctions,
               check_gate_zone, check_parallel_crossings, check_seam_fits, check_seam_census,
@@ -948,9 +947,16 @@ def report(d: int) -> None:
         chk(d)
     if d == 3:
         check_d3_matches_reference()
+    return len(checks) + (d == 3)
+
+
+def report(d: int) -> None:
+    """Build and certify the whole schedule for one distance, and print its numbers.
+    Usage: python3 qec_scheduler.py 7   (d must be an odd integer >= 3)."""
+    n = certify(d)
     t = op_tally(d, merge=True, rounds=d)
     ps = len(parallel_steps(d, merge=True, rounds=d))
-    print(f"d={d}: all {len(checks) + (d == 3)} checks PASS")
+    print(f"d={d}: all {n} checks PASS")
     print(f"  per-cell ancillas {per_cell_ancillas(d)}  (max {max(per_cell_ancillas(d))})")
     print(f"  seam: {bell_pairs_per_round(d)} Bell pairs/round, {d} comm lanes ({d - 1} used + 1 spare)")
     print(f"  blocked comm lanes {blocked_lanes(d)}; bottom cell gains {bottom_park_wells(d)} park wells")
@@ -1053,6 +1059,9 @@ if __name__ == "__main__":
         print(f"  comm-ion count ...... note: {comm_ions_per_lane()} per lane, cycling herald/deliver/measure/re-herald (a herald pool is a Ch5 option)")
         for d in (3, 5, 7):
             print(f"    d={d}: cells stay {per_cell_ancillas(d)} (max {d}); a new seam ancilla per check would force max {netnew_busiest(d)}; blocked lanes {blocked_lanes(d)} clear to spare/routing")
+        for dd in range(3, 29, 2):                     # the thesis claim, end to end
+            certify(dd)
+        print("full certification .. PASS  (every check, every odd d = 3 to 27)")
     except NotImplementedError as e:
         print("not written yet:", e)
     except AssertionError as e:

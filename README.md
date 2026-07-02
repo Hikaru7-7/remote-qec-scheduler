@@ -22,13 +22,15 @@ Python 3. Nothing else. Both programs use only the standard library.
 ## Run it
 
 ```
-python3 qec_scheduler.py        # sweep d = 3..15, all structural checks (expect 15 PASS)
+python3 qec_scheduler.py        # named checks, then every check at every odd d = 3..27 (expect 16 PASS)
 python3 qec_scheduler.py 7      # one-distance report: placement, seam, depth, tally
 python3 qec_visualizer.py      # build the d=3 and d=5 HTML animations
 python3 qec_visualizer.py 7    # build the d=7 HTML animations
 ```
 
-Checks pass at every odd distance tried up to `python3 qec_scheduler.py 27`.
+The default run ends by certifying every odd distance up to 27, so the claim
+in the thesis is exactly what the command shows. One distance at a time is
+`python3 qec_scheduler.py 27`.
 
 ## Files
 
