@@ -411,11 +411,27 @@ def write_html(path, merge, rounds, d=3):
 
 if __name__ == "__main__":
     import sys
-    ds = [int(sys.argv[1])] if len(sys.argv) > 1 else [3, 5]
+    import qec_scheduler as S
+    sweep = len(sys.argv) > 1 and sys.argv[1] == "all"
+    if sweep:
+        ds = list(range(3, 29, 2))                   # the thesis sweep, every odd d
+    else:
+        ds = [int(sys.argv[1])] if len(sys.argv) > 1 else [3, 5]
+    rows = []
     for d in ds:
+        nchk = S.certify(d)                          # the scheduler's own checks first
+        cells = {}
         for merge, rounds, tag in [(False, 1, "round"), (True, MERGE_ROUNDS, "merge_full")]:
             path = f"qec_{tag}_sim_d{d}.html"
             n, bad = write_html(path, merge, rounds, d)
+            cells[tag] = (len(S.parallel_steps(d, merge, rounds)), n, len(bad))
             print(f"d={d} {tag:10s}: {n} frames, {len(bad)} overlaps -> {path}")
             for k, b in bad[:8]:
                 print(f"   frame {k}: {b}")
+        rows.append((d, nchk, cells["round"], cells["merge_full"]))
+    if sweep:                                        # the two-program comparison, per distance
+        print()
+        print("| d | scheduler checks | local round steps | frames | overlaps | 2-round merge steps | frames | overlaps |")
+        print("|--:|:----------------:|------------------:|-------:|---------:|--------------------:|-------:|---------:|")
+        for d, nchk, (rs, rf, ro), (ms, mf, mo) in rows:
+            print(f"| {d} | {nchk} PASS | {rs} | {rf} | {ro} | {ms} | {mf} | {mo} |")

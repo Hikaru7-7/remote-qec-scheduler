@@ -1,3 +1,14 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# sweep pages beyond d=7 are rebuilt locally (python3 qec_visualizer.py all),
+# not hosted; only the d=3/5/7 pairs are committed and served on Pages
+qec_round_sim_d*.html
+qec_merge_full_sim_d*.html
+!qec_round_sim_d3.html
+!qec_round_sim_d5.html
+!qec_round_sim_d7.html
+!qec_merge_full_sim_d3.html
+!qec_merge_full_sim_d5.html
+!qec_merge_full_sim_d7.html
