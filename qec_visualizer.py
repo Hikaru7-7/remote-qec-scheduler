@@ -273,8 +273,10 @@ def build(merge=False, rounds=1, d=3):
         elif v == "reset":
             swap_pairs([(A(s), Dt(rc)) for s, rc in op[1]], "Reset: an ancilla and its data")
         elif v == "reset_done":
-            snap(f"Ancillas are reset and back in their memory wells for round {op[1] + 2}.",
-                 hi=[LABEL[s] for s in STABS if not (merge and is_right_boundary(s))])
+            txt = (f"Ancillas are reset and back in their memory wells for round {op[1] + 2}."
+                   if op[1] + 1 < rounds else
+                   "Ancillas are reset and back in their memory wells. The schedule ends where it began.")
+            snap(txt, hi=[LABEL[s] for s in STABS if not (merge and is_right_boundary(s))])
         elif v == "herald":
             snap("The comm ions herald a fresh Bell pair at their cavities.", hi=[C(l) for l in op[1]])
         else:

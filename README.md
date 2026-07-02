@@ -22,7 +22,7 @@ Python 3. Nothing else. Both programs use only the standard library.
 ## Run it
 
 ```
-python3 qec_scheduler.py        # named checks, then every check at every odd d = 3..27 (expect 16 PASS)
+python3 qec_scheduler.py        # named checks, then every check at every odd d = 3..27 (expect 17 PASS)
 python3 qec_scheduler.py 7      # one-distance report: placement, seam, depth, tally
 python3 qec_visualizer.py      # build the d=3 and d=5 HTML animations
 python3 qec_visualizer.py 7    # build the d=7 HTML animations
@@ -59,13 +59,16 @@ than take it on trust.
 
 ## Headline numbers to reproduce
 
-- Local round depth is exactly `22 + d` parallel time-steps at every distance.
-  A flat 19-step connection band, then a readout tail of `d + 3`. This is an
-  asserted check, not a printout.
+- Local round depth is exactly `22 + 2d` parallel time-steps at every distance.
+  A flat 19-step connection band, a readout tail of `d + 3`, then `d` swap
+  layers back to the rest state. This is an asserted check, not a printout.
 - A cross-row ancilla swaps toward its junction only when a data ion blocks
   the way; the junction-adjacent half of the crossings lift directly, and
   those free lifts overlap the in-row gates. That is why the band is 19.
-- The full d-round merge packs into 75, 155, and 245 time-steps at d = 3, 5, 7.
+- Every schedule ends in the placement it started from, every swap replayed
+  and undone. This is its own check, so rounds and merges chain.
+- The full d-round merge packs into 78, 160, and 252 time-steps at d = 3, 5, 7,
+  and every one of its d rounds takes exactly the same number of steps.
 - Resources are closed forms. `d^2` data ions, `d^2 - 1` ancillas, `d` comm
   lanes, `d - 1` Bell pairs per merge round, `4d(d - 1)` two-qubit gates per
   round, `floor((d-1)/2)` park wells.

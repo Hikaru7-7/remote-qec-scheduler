@@ -604,9 +604,10 @@ def round_ops(d: int, merge: bool = False, rounds: int = 1) -> list:
         ops.append(("to_spam", read))                    # shuttle out past the data to the isolated SPAM zone
         ops.append(("syndromes", read, merge))           # 493 nm readout there, its own step (light kept off the data)
         ops.append(("from_spam", read))                  # shuttle back in from the SPAM zone once read
-        if rnd < rounds - 1:
-            ops += [("reset", layer) for layer in reversed(layers)]
-            ops.append(("reset_done", rnd))
+        # every round swaps back to the interleaved rest state, the last one
+        # included, so the schedule ends where it began and rounds chain
+        ops += [("reset", layer) for layer in reversed(layers)]
+        ops.append(("reset_done", rnd))
     if plan:
         ops.append(("unpark", plan))
     return ops
@@ -627,8 +628,9 @@ def check_round_ops(d: int) -> None:
             for s, rc in op[2]:
                 assert isinstance(rc, tuple) and len(rc) == 2 and \
                     0 <= rc[0] < d and 0 <= rc[1] < d, f"d={d}: swap onto bad site {rc}"
-    # the packed local round is exactly 22+d deep: 19 connection + (d+3) readout
-    assert len(parallel_steps(d, merge=False)) == 22 + d, f"d={d}: round depth is not 22+d"
+    # the packed local round is exactly 22+2d deep: 19 connection + d file-out
+    # + 3 shuttle/read/shuttle + d reset back to the interleaved rest state
+    assert len(parallel_steps(d, merge=False)) == 22 + 2 * d, f"d={d}: round depth is not 22+2d"
     # a merge adds the seam: d-1 comm deliveries, each two gates (same + cross)
     m = round_ops(d, merge=True, rounds=1)
     cg = sum(len(op[2]) for op in m if op[0] == "comm_gate")
@@ -948,6 +950,32 @@ def check_junctions(d: int) -> None:
         used[step].add(junction)
 
 
+def check_ends_at_rest(d: int) -> None:
+    """Check: the schedule ends at the resting placement. Every emitted swap
+    (the in-band conditional swaps, the readout file-out, and the reset) is
+    replayed on the row order, and the final order must equal the placement,
+    for a local round, one merge round, and a two-round merge."""
+    for merge, rounds in ((False, 1), (True, 1), (True, 2)):
+        rows = [list(cell) for cell in place(d)]
+        start = [list(r) for r in rows]
+        pos = {it: (ri, ci) for ri, row in enumerate(rows) for ci, (k, it) in enumerate(row)}
+
+        def swap(a, b):
+            (ra, ca), (rb, cb) = pos[a], pos[b]
+            rows[ra][ca], rows[rb][cb] = rows[rb][cb], rows[ra][ca]
+            pos[a], pos[b] = (rb, cb), (ra, ca)
+
+        for op in round_ops(d, merge=merge, rounds=rounds):
+            if op[0] in ("readout", "reset"):
+                for s, rc in op[1]:
+                    swap(s, rc)
+            elif op[0] == "swap":
+                for s, rc in op[2]:
+                    swap(s, rc)
+        assert rows == start, \
+            f"d={d} merge={merge} rounds={rounds}: schedule does not end at rest"
+
+
 # --- RUN -------------------------------------------------------------------
 # Run the checks. Print pass or fail.
 def certify(d: int) -> int:
@@ -956,7 +984,7 @@ def certify(d: int) -> int:
     checks = [check_census, check_no_double_touch, check_placement, check_junctions,
               check_gate_zone, check_parallel_crossings, check_seam_fits, check_seam_census,
               check_merge_demand, check_comm_ions, check_seam_schedule, check_merge_no_crowding,
-              check_lane_clearing, check_round_ops]
+              check_lane_clearing, check_round_ops, check_ends_at_rest]
     for chk in checks:
         chk(d)
     if d == 3:
@@ -1057,6 +1085,9 @@ if __name__ == "__main__":
         for d in (3, 5, 7, 9, 11, 15):
             check_round_ops(d)
         print("  round operations .... PASS  (swap=merge/rotate/split, comm delivery through SPAM; gates cover every coupling)")
+        for d in (3, 5, 7, 9, 11, 15):
+            check_ends_at_rest(d)
+        print("  ends at rest ........ PASS  (every swap replayed; the schedule ends in the placement it started from)")
         no = len(round_ops(3, merge=False)); nm = len(round_ops(3, merge=True, rounds=2))
         print(f"    d=3: {no} ops in a local round, {nm} ops in a 2-round merge")
         print("operation tally (Chapter 5 weights each beat kind by a duration):")
